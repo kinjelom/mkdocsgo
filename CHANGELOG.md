@@ -12,6 +12,8 @@ change, not at release time.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-14
+
 ### Fixed
 
 - `get_page` and `get_section` now carry the Markdown in the structured result
