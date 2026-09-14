@@ -117,6 +117,7 @@ type pageOut struct {
 	InNav      bool          `json:"in_nav" jsonschema:"false for a page the navigation does not reference"`
 	Bytes      int           `json:"bytes"`
 	Sections   []pageSection `json:"sections" jsonschema:"headings in document order, for use with get_section"`
+	Markdown   string        `json:"markdown" jsonschema:"the page's original Markdown source, the same text as the content block"`
 }
 
 type sectionIn struct {
@@ -132,6 +133,7 @@ type sectionOut struct {
 	Level      int    `json:"level"`
 	Line       int    `json:"line"`
 	URI        string `json:"uri"`
+	Markdown   string `json:"markdown" jsonschema:"the section heading and the text beneath it, as original Markdown; the same text as the content block"`
 }
 
 type listIn struct {
@@ -288,6 +290,7 @@ func (s *Service) getPage(ctx context.Context, _ *mcp.CallToolRequest, in pageIn
 		Breadcrumb: page.Breadcrumb(),
 		InNav:      page.InNav,
 		Bytes:      len(page.Source),
+		Markdown:   page.Source,
 	}
 	for _, section := range page.Sections {
 		if section.Title == "" {
@@ -300,8 +303,10 @@ func (s *Service) getPage(ctx context.Context, _ *mcp.CallToolRequest, in pageIn
 			Line:    section.Line,
 		})
 	}
-	// The Markdown goes in the content, the metadata in the structured result,
-	// so the page text is not billed to the context twice.
+	// The same Markdown goes in both channels. A client that understands output
+	// schemas may render structuredContent and never look at the content block,
+	// so putting the text in only one of them makes the tool return nothing
+	// readable on half the clients.
 	return &mcp.CallToolResult{Content: []mcp.Content{
 		&mcp.TextContent{Text: page.Source},
 	}}, out, nil
@@ -321,6 +326,11 @@ func (s *Service) getSection(ctx context.Context, _ *mcp.CallToolRequest, in sec
 		if anchor != "" {
 			uri += "#" + anchor
 		}
+		heading := ""
+		if section.Title != "" {
+			heading = strings.Repeat("#", section.Level) + " " + section.Title + "\n\n"
+		}
+		markdown := heading + section.Body
 		out := sectionOut{
 			Path:       page.Path,
 			Anchor:     section.Anchor,
@@ -329,13 +339,10 @@ func (s *Service) getSection(ctx context.Context, _ *mcp.CallToolRequest, in sec
 			Level:      section.Level,
 			Line:       section.Line,
 			URI:        uri,
-		}
-		heading := ""
-		if section.Title != "" {
-			heading = strings.Repeat("#", section.Level) + " " + section.Title + "\n\n"
+			Markdown:   markdown,
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{
-			&mcp.TextContent{Text: heading + section.Body},
+			&mcp.TextContent{Text: markdown},
 		}}, out, nil
 	}
 	return errorResult[sectionOut](fmt.Sprintf(

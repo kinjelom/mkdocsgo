@@ -165,6 +165,14 @@ func TestGetPageReturnsSourceAndHeadings(t *testing.T) {
 		t.Error("the page source is not in the content")
 	}
 	out := structured[pageOut](t, res)
+	// A client that understands output schemas may render structuredContent and
+	// never read the content block; the Markdown has to be in both.
+	if !strings.Contains(out.Markdown, "# Deploying") {
+		t.Error("the page source is not in the structured result")
+	}
+	if out.Markdown != textOf(res) {
+		t.Error("the two channels disagree about the page source")
+	}
 	if out.Path != "guides/deploy.md" {
 		t.Errorf("Path = %q, want the resolved path", out.Path)
 	}
@@ -193,6 +201,16 @@ func TestGetSectionReturnsOnlyThatSection(t *testing.T) {
 	}
 	if strings.Contains(text, "rolling deployment keeps") {
 		t.Error("get_section leaked a neighbouring section")
+	}
+	out := structured[sectionOut](t, res)
+	if !strings.Contains(out.Markdown, "IMAGE_VERSION") {
+		t.Error("the requested section is not in the structured result")
+	}
+	if strings.Contains(out.Markdown, "rolling deployment keeps") {
+		t.Error("the structured result leaked a neighbouring section")
+	}
+	if out.Markdown != text {
+		t.Error("the two channels disagree about the section text")
 	}
 	// A leading '#' is a natural thing for a model to send.
 	again := call(t, session, ctx, "get_section", map[string]any{

@@ -12,6 +12,17 @@ change, not at release time.
 
 ## [Unreleased]
 
+### Fixed
+
+- `get_page` and `get_section` now carry the Markdown in the structured result
+  as well as in the content block. Both tools declare an output schema, so a
+  client may render `structuredContent` and never read the content block - and
+  such a client saw the metadata and none of the text. The two channels now
+  hold the same Markdown. The `markdown` field is additive, so a client already
+  reading the structured result keeps every field it had. `search_docs` and
+  `list_pages` were never affected: their structured results already carried
+  the text, which is why only these two tools looked empty.
+
 ## [0.1.0] - 2026-09-14
 
 The first release. Everything below is new.
