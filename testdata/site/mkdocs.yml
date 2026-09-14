@@ -1,0 +1,9 @@
+site_name: Test Docs
+docs_dir: docs
+exclude_docs: |
+  partials/
+nav:
+  - Home: index.md
+  - Guides:
+      - Overview: guides/index.md
+      - Deploying: guides/deploy.md

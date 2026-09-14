@@ -1,0 +1,10 @@
+/bin/
+/dist/
+*.test
+coverage.out
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
