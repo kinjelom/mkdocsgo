@@ -21,7 +21,7 @@
 ARG PYTHON_IMAGE=python:3.13-slim
 # Pin it. `:latest` in a build stage means this image changes when someone
 # else cuts a release, and a rollback then has nothing to go back to.
-ARG MKDOCSGO_IMAGE=ghcr.io/kinjelom/mkdocsgo:0.1.0
+ARG MKDOCSGO_IMAGE=ghcr.io/kinjelom/mkdocsgo:0.1.1
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
 # --- 1. Build the site ------------------------------------------------------

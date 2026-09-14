@@ -64,7 +64,7 @@ project bakes itself in and ships one self-contained image:
 
 ```dockerfile
 ARG PYTHON_IMAGE=python:3.13-slim
-ARG MKDOCSGO_IMAGE=ghcr.io/kinjelom/mkdocsgo:0.1.0
+ARG MKDOCSGO_IMAGE=ghcr.io/kinjelom/mkdocsgo:0.1.1
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
 FROM ${PYTHON_IMAGE} AS site
