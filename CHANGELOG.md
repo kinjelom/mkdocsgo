@@ -12,6 +12,8 @@ change, not at release time.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-14
+
 The first release. Everything below is new.
 
 While the version is `0.x` the flag surface and the MCP payload shapes may
