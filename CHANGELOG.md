@@ -12,6 +12,44 @@ change, not at release time.
 
 ## [Unreleased]
 
+### Added
+
+- **Zones**: `mkdocsgo.yml` beside `mkdocs.yml` maps the addresses the server
+  answers on to a named zone, and a zone to `public`, `restricted` or `off`.
+  Several addresses may share one; the most specific pattern wins; an address
+  no zone claims is refused. This is what lets one deployment serve an intranet
+  route openly and an internet route only to named principals. A project
+  without the file behaves exactly as it did before - everything public, no
+  challenge - so the upgrade is a no-op until you write one. `-config` points
+  at the file elsewhere.
+- A restricted zone asks a browser for HTTP Basic credentials and an agent for
+  `Authorization: Bearer`. The MCP `401` carries the `WWW-Authenticate`
+  challenge the specification asks for, pointing at RFC 9728 protected resource
+  metadata the server publishes at `/.well-known/oauth-protected-resource/mcp`
+  - so the day a zone moves to Keycloak, a client that already follows the
+  pointer needs no change. `method:` is that seam, and `oidc` is refused at
+  startup rather than ignored.
+- Credentials are stored as hashes - Argon2id for a password, SHA-256 for a
+  token - which is why the file is not a secret and needs no encryption. Bcrypt
+  hashes from `htpasswd -B` are accepted as well. `-new-token` and
+  `-hash-password` mint them and print the line to paste.
+- The access log names the zone and, where there is one, the principal and the
+  credential id it came in on. The `Authorization` header is never logged.
+- `AUTH.md`, and `docs/adr/0001-zone-based-authentication.md` for why it is
+  shaped this way - including what was rejected: zones that also scope content,
+  and an encrypted credentials file.
+
+### Changed
+
+- In a restricted zone every `Cache-Control` the site would have sent as
+  `public` is sent as `private`, and responses carry
+  `X-Robots-Tag: noindex, nofollow`. The freshness is unchanged; a shared cache
+  loses the right to store the page and hand it to the next person.
+- Configuration errors stop the server. A restricted zone with no principals, a
+  principal nobody lets in, a plaintext password where a hash belongs, one host
+  in two zones, an unknown key - each fails at startup rather than at some
+  later request.
+
 ## [0.1.1] - 2026-09-14
 
 ### Fixed

@@ -34,6 +34,12 @@ binary and is therefore identical in every project that uses it.
 `no-cache` does not mean "do not cache". It means "revalidate before use", and
 revalidating against a content-hash ETag costs one 304.
 
+**In a restricted zone every line above becomes `private`**, and each response
+carries `X-Robots-Tag: noindex, nofollow`. The freshness is unchanged - a
+fingerprinted asset is still immutable to the browser that fetched it - but a
+shared cache loses the right to store it and hand it to the next person.
+[AUTH.md](./AUTH.md) has the rest.
+
 ## Cost at rest
 
 For a 77-file, 6.9 MB site: 1.6 MB held gzipped in memory, and a startup well
@@ -51,10 +57,15 @@ which resolves against the page set loaded from `docs_dir`.
 
 ## What it will not do
 
-No TLS termination, no rewrites, no redirect maps, no authentication, no rate
-limiting, no `try_files`. All of that belongs in front of the server - the
-Cloud Foundry router, an Ingress, a reverse proxy - which is where most
-deployments already have it.
+No TLS termination, no rewrites, no redirect maps, no rate limiting, no
+`try_files`. All of that belongs in front of the server - the Cloud Foundry
+router, an Ingress, a reverse proxy - which is where most deployments already
+have it.
+
+Authentication is the one thing that moved in: a zone can ask for HTTP Basic
+credentials, because which address gets which policy is a property of the
+documentation repository and not of the platform it happens to run on. It is
+whole-zone and nothing more - no per-path rules, no roles, no sessions.
 
 If you were using nginx for more than serving files, you still need nginx. See
 [COMPARISON.md](./COMPARISON.md).

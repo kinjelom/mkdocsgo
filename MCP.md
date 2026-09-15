@@ -88,7 +88,33 @@ bound to their loopback interface.
 - Anything else gets 403 unless named with `-allow-origin`, which is
   repeatable.
 
-The site is not origin-guarded. It is a public website.
+It runs outside the zone check and before it, so a rebinding attempt is
+rejected before the process spends anything on verifying a credential.
+
+## Authentication
+
+Nothing here needs credentials unless the address it arrived at belongs to a
+restricted zone - see [AUTH.md](./AUTH.md) for the whole of it. What the MCP
+half contributes:
+
+- the token travels in `Authorization: Bearer`, which is what the
+  specification asks for and what clients already send;
+- an unauthenticated request gets `401` with
+  `WWW-Authenticate: Bearer realm="…", resource_metadata="…"`;
+- that pointer resolves to RFC 9728 protected resource metadata this server
+  publishes at `/.well-known/oauth-protected-resource/mcp`, outside the zone,
+  because a client reads it in order to learn how to authenticate.
+
+```json
+{ "mcpServers": { "docs": {
+  "type": "http",
+  "url": "https://docs.example.com/mcp",
+  "headers": { "Authorization": "Bearer mkd_…" }
+}}}
+```
+
+**stdio has no zones**: no `Host` to match, and the client is a process the
+user started.
 
 ## Anchors
 

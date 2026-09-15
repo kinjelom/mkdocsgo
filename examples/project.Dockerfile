@@ -21,7 +21,7 @@
 ARG PYTHON_IMAGE=python:3.13-slim
 # Pin it. `:latest` in a build stage means this image changes when someone
 # else cuts a release, and a rollback then has nothing to go back to.
-ARG MKDOCSGO_IMAGE=ghcr.io/kinjelom/mkdocsgo:0.1.1
+ARG MKDOCSGO_IMAGE=ghcr.io/kinjelom/mkdocsgo:0.2.0
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
 # --- 1. Build the site ------------------------------------------------------
@@ -56,6 +56,12 @@ COPY --from=server /mkdocsgo /mkdocsgo
 COPY --from=site /site /project/site
 COPY mkdocs.yml /project/mkdocs.yml
 COPY docs/ /project/docs/
+
+# Zones, if the project has them. The file holds hashes and no secrets, so it
+# travels in the image like any other configuration. Drop this line for a
+# project that serves everything publicly - the server reads it only if it is
+# there. See AUTH.md.
+COPY mkdocsgo.yml /project/mkdocsgo.yml
 
 EXPOSE 8080
 

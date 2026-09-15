@@ -12,9 +12,12 @@
 //	site      the site only - a drop-in replacement for an nginx container
 //	mcp       MCP only - over stdio when -http is absent, else at /mcp
 //
-// There is no authentication. Everything served is read-only and the
-// documentation is whatever is already published. Origin validation is still
-// enforced on /mcp: that is DNS-rebinding defence, not access control.
+// Access is governed by zones, when the project has an mkdocsgo.yml: the
+// address a request arrived at selects a policy, and a restricted zone asks a
+// browser for HTTP Basic credentials and an agent for a bearer token. A
+// project without that file serves everything publicly, as before. Origin
+// validation on /mcp is unchanged and unrelated: that is DNS-rebinding
+// defence, not access control.
 package main
 
 import (
@@ -24,16 +27,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/term"
 
+	"github.com/kinjelom/mkdocsgo/internal/authz"
 	"github.com/kinjelom/mkdocsgo/internal/mcpserver"
 	"github.com/kinjelom/mkdocsgo/internal/mkdocs"
 	"github.com/kinjelom/mkdocsgo/internal/web"
@@ -60,6 +67,7 @@ type config struct {
 	mode        string
 	project     string
 	siteDir     string
+	configPath  string
 	httpAddr    string
 	searchLimit int
 	noResources bool
@@ -72,18 +80,39 @@ func main() {
 	flag.StringVar(&cfg.mode, "mode", modeBoth, "what to serve: site+mcp, site, or mcp")
 	flag.StringVar(&cfg.project, "project", ".", "path to the MkDocs project (the directory holding mkdocs.yml)")
 	flag.StringVar(&cfg.siteDir, "site-dir", "", "path to the built site; defaults to <project>/site")
+	flag.StringVar(&cfg.configPath, "config", "", "path to the zone configuration; defaults to <project>/"+authz.DefaultFileName)
 	flag.StringVar(&cfg.httpAddr, "http", defaultHTTPAddr(), "address to listen on, e.g. 0.0.0.0:8080; defaults to 0.0.0.0:$DOC_PORT or 0.0.0.0:$PORT; required except in mcp mode over stdio")
 	flag.IntVar(&cfg.searchLimit, "search-limit", mcpserver.DefaultSearchLimit, "default number of search results")
 	flag.BoolVar(&cfg.noResources, "no-resources", false, "expose MCP tools only, without one resource per page")
 	flag.BoolVar(&cfg.noAccessLog, "no-access-log", false, "do not log HTTP requests")
 	flag.Var(&cfg.origins, "allow-origin", "additional allowed Origin for /mcp; repeatable")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	newToken := flag.Bool("new-token", false, "mint a bearer token, print it and the line to paste into "+authz.DefaultFileName+", then quit")
+	hashPassword := flag.Bool("hash-password", false, "hash a password for "+authz.DefaultFileName+", then quit")
 	healthcheck := flag.String("healthcheck", "", "GET this URL, exit 0 if it answers 2xx, then quit; \"self\" means this server's own /healthz")
 	mcpProbe := flag.String("mcp-probe", "", "ask this MCP endpoint for its tool list, exit 0 if it answers with tools, then quit")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println("mkdocsgo", version)
+		return
+	}
+
+	// Credential tools. They read nothing and serve nothing, so they run
+	// before any project is loaded: `mkdocsgo -new-token` works in an empty
+	// directory, which is where somebody preparing a configuration usually is.
+	if *newToken {
+		if err := printNewToken(); err != nil {
+			fmt.Fprintln(os.Stderr, "could not mint a token:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *hashPassword {
+		if err := printPasswordHash(); err != nil {
+			fmt.Fprintln(os.Stderr, "could not hash the password:", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -140,6 +169,14 @@ func run(cfg config, logger *log.Logger) error {
 		return fmt.Errorf("-mode %s needs -http, for example -http 0.0.0.0:8080", cfg.mode)
 	}
 
+	// Loaded before the site and the index, because a configuration error
+	// should cost a second rather than the time it takes to hash and compress
+	// a whole site first.
+	zones, err := loadZones(cfg)
+	if err != nil {
+		return err
+	}
+
 	var site *web.Site
 	if servesSite {
 		dir := cfg.siteDir
@@ -177,6 +214,12 @@ func run(cfg config, logger *log.Logger) error {
 	// MCP only, no address: the transport is stdio, which is what a local
 	// client launches. Nothing else can be served that way.
 	if cfg.mode == modeMCP && cfg.httpAddr == "" {
+		if zones != nil {
+			// stdio has no Host to match a zone against, and the client is a
+			// process the user started themselves. Saying so beats letting
+			// someone believe a policy is in force here.
+			logger.Print("auth: zones do not apply over stdio - the transport is a local pipe")
+		}
 		logger.Print("mcp: serving over stdio")
 		err := newMCPServer(service).Run(ctx, &mcp.StdioTransport{})
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -185,7 +228,91 @@ func run(cfg config, logger *log.Logger) error {
 		return nil
 	}
 
-	return serveHTTP(ctx, logger, cfg, site, service)
+	return serveHTTP(ctx, logger, cfg, zones, site, service)
+}
+
+// loadZones reads the zone configuration.
+//
+// A missing file at the default location is not an error: a project that never
+// asked for zones serves everything publicly, exactly as it did before they
+// existed. A missing file at a path someone passed explicitly is an error,
+// because they said where it was.
+func loadZones(cfg config) (*authz.Config, error) {
+	path := cfg.configPath
+	explicit := path != ""
+	if !explicit {
+		path = filepath.Join(cfg.project, authz.DefaultFileName)
+	}
+	zones, err := authz.Load(path)
+	switch {
+	case err == nil:
+		return zones, nil
+	case !explicit && errors.Is(err, fs.ErrNotExist):
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("cannot load the zone configuration: %w", err)
+	}
+}
+
+// printNewToken implements -new-token.
+func printNewToken() error {
+	secret, hash, err := authz.NewToken()
+	if err != nil {
+		return err
+	}
+	// The secret is printed once and never stored anywhere: what goes into the
+	// configuration is the digest below it.
+	fmt.Printf("token (copy it now, it cannot be recovered):\n  %s\n\n", secret)
+	fmt.Printf("paste into %s, under the principal it belongs to:\n", authz.DefaultFileName)
+	fmt.Printf("    tokens:\n      - id: %s\n        hash: \"%s\"\n", time.Now().UTC().Format("2006-01"), hash)
+	return nil
+}
+
+// printPasswordHash implements -hash-password.
+func printPasswordHash() error {
+	password, err := readPassword()
+	if err != nil {
+		return err
+	}
+	hash, err := authz.HashPassword(password)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\npaste into %s, under the principal it belongs to:\n", authz.DefaultFileName)
+	fmt.Printf("    password: \"%s\"\n", hash)
+	return nil
+}
+
+// readPassword takes the password from the terminal without echoing it, and
+// from stdin when there is no terminal - which is how a script would call it.
+func readPassword() (string, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		raw, err := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimRight(string(raw), "\r\n"), nil
+	}
+
+	fmt.Fprint(os.Stderr, "password: ")
+	first, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprint(os.Stderr, "again   : ")
+	second, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	if string(first) != string(second) {
+		return "", fmt.Errorf("the two entries differ")
+	}
+	if len(first) == 0 {
+		return "", fmt.Errorf("empty password")
+	}
+	return string(first), nil
 }
 
 func newMCPServer(service *mcpserver.Service) *mcp.Server {
@@ -201,14 +328,26 @@ func newMCPServer(service *mcpserver.Service) *mcp.Server {
 	return server
 }
 
-func serveHTTP(ctx context.Context, logger *log.Logger, cfg config, site *web.Site, service *mcpserver.Service) error {
+func serveHTTP(ctx context.Context, logger *log.Logger, cfg config, zones *authz.Config, site *web.Site, service *mcpserver.Service) error {
 	mux := http.NewServeMux()
 
+	// Outside every zone, deliberately. A platform health check arrives at the
+	// container's address rather than at a route, so a zone would turn every
+	// probe into a 403 and the application would never come up.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write([]byte("ok\n"))
 	})
+
+	if zones != nil {
+		// Also outside every zone: a client reads this document in order to
+		// learn how to authenticate, so requiring authentication for it would
+		// be a closed loop.
+		metadata := zones.Metadata()
+		mux.Handle(authz.MetadataPath, metadata)
+		mux.Handle(authz.MetadataPathMCP, metadata)
+	}
 
 	if service != nil {
 		handler := mcp.NewStreamableHTTPHandler(
@@ -220,10 +359,14 @@ func serveHTTP(ctx context.Context, logger *log.Logger, cfg config, site *web.Si
 		)
 		// An exact pattern beats the "/" subtree, so /mcp reaches MCP even
 		// though the site is mounted at the root.
-		mux.Handle("/mcp", guardOrigin(cfg.origins, handler))
+		//
+		// The origin guard stays outside the zone check: a DNS-rebinding
+		// attempt is rejected before it can make the process spend anything
+		// on verifying a credential.
+		mux.Handle("/mcp", guardOrigin(cfg.origins, zones.Middleware(authz.SurfaceMCP, handler)))
 	}
 	if site != nil {
-		mux.Handle("/", site.Handler())
+		mux.Handle("/", zones.Middleware(authz.SurfaceSite, site.Handler()))
 	}
 
 	var handler http.Handler = mux
@@ -249,7 +392,8 @@ func serveHTTP(ctx context.Context, logger *log.Logger, cfg config, site *web.Si
 		case service != nil:
 			what = "site at / and mcp at /mcp"
 		}
-		logger.Printf("listening on http://%s - %s (no authentication)", cfg.httpAddr, what)
+		logger.Printf("listening on http://%s - %s", cfg.httpAddr, what)
+		logger.Printf("auth: %s", zones.Summary())
 		errc <- srv.ListenAndServe()
 	}()
 
@@ -315,12 +459,20 @@ func logRequests(logger *log.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		rec := &statusRecorder{ResponseWriter: w}
-		next.ServeHTTP(rec, r)
+		// The zone check runs underneath this handler and attaches its result
+		// to a request this one never sees, so it is handed somewhere to put
+		// it. Without a zone configuration nothing ever fills it in.
+		ctx, identity := authz.WithRecorder(r.Context())
+		next.ServeHTTP(rec, r.WithContext(ctx))
 		if rec.status == 0 {
 			rec.status = http.StatusOK
 		}
-		logger.Printf("%s %s %d %dB %s", r.Method, r.URL.Path, rec.status, rec.bytes,
-			time.Since(started).Round(time.Millisecond))
+		who := identity.Identity().LogFields()
+		if who != "" {
+			who = " " + who
+		}
+		logger.Printf("%s %s %d %dB %s%s", r.Method, r.URL.Path, rec.status, rec.bytes,
+			time.Since(started).Round(time.Millisecond), who)
 	})
 }
 

@@ -38,7 +38,8 @@ the same problem: serving a built site from your own infrastructure.
 | Readable by an agent           | no                                                       | `/mcp`, same port                                                   |
 | Liveness endpoint              | whatever you configure                                   | `/healthz`, always                                                  |
 | Live reload                    | no                                                       | no                                                                  |
-| TLS, auth, rewrites, redirects | yes, it is nginx                                         | no - put it behind something                                        |
+| TLS, rewrites, redirects       | yes, it is nginx                                         | no - put it behind something                                        |
+| Authentication                 | `auth_basic`, plus whatever module you add                | per-zone Basic and bearer tokens, from the documentation repository |
 
 ### The ETag difference, concretely
 
@@ -99,7 +100,7 @@ the way Python-Markdown's `toc` extension computes them. It matches today, and
 caught in CI rather than in a broken deep link. It is still a reimplementation.
 
 **You lose nginx's general-purpose configurability.** No TLS termination, no
-rewrites, no redirect maps, no auth, no rate limiting, no `try_files`. All of
+rewrites, no redirect maps, no rate limiting, no `try_files`. All of
 it lives in front of the server instead - the CF router, an Ingress, a reverse
 proxy - which is where most deployments already have it. If you were using
 nginx for more than serving files, you still need nginx.
@@ -130,7 +131,7 @@ on it.
 
 - **A public site on GitHub Pages or a CDN.** Setup B is cheaper, faster and
   has nothing to operate. There is no server to add MCP to.
-- **You need nginx for something else** - TLS, auth, rewrites, proxying other
+- **You need nginx for something else** - TLS, rewrites, proxying other
   backends. Then you have nginx anyway; serving `site/` from it too is free.
 - **Nothing will ever read the documentation but a browser.** Then D's headline
   feature is unused, and the argument narrows to image size and ETags - real,

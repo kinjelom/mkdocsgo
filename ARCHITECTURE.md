@@ -46,6 +46,11 @@ flowchart TB
 
     mux{"path"}
 
+    subgraph authzp["internal/authz"]
+        zone["Host -> zone<br/>public / restricted / off"]
+        cred["Basic or Bearer<br/>against stored hashes"]
+    end
+
     subgraph websrv["internal/web"]
         manifest["Manifest built at startup<br/>content hash -> ETag<br/>gzip held in memory<br/>content type, cache policy"]
     end
@@ -62,11 +67,23 @@ flowchart TB
 
     req --> logm --> rec --> mux
     mux -->|/healthz| ok["200 ok"]
-    mux -->|/mcp| guard --> tools
-    mux -->|everything else| manifest
+    mux -->|/.well-known| prm["resource metadata"]
+    mux -->|/mcp| guard --> zone
+    mux -->|everything else| zone
+    zone -->|restricted| cred
+    cred --> manifest
+    cred --> tools
+    zone -->|public| manifest
+    zone -->|public| tools
     tools --> pages
     tools --> idx
 ```
+
+`/healthz` and the metadata document sit outside the zone check on purpose: a
+platform probe arrives at the container's address rather than at a route, and a
+client reads the metadata in order to learn how to authenticate. The origin
+guard stays outside it too, so a DNS-rebinding attempt never reaches a password
+hash.
 
 `/mcp` is an exact route and `/` a subtree, so the exact one wins even though
 the site is mounted at the root. `-mode` decides which of the two branches is
@@ -76,6 +93,7 @@ registered at all: neither is a runtime check.
 
 | Step              | What happens                                                 | Why it is not obvious                                                                                               |
 |-------------------|--------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| Read `mkdocsgo.yml` | Zones, principals, credential hashes                       | First, and strict: a configuration error costs a second rather than the time to hash and compress a whole site first. A restricted zone that could never let anyone in stops the server |
 | Read `mkdocs.yml` | Decoded into a `yaml.Node`                                   | A plain map loses nav ordering, and `mkdocs.yml` routinely carries `!!python/name:` tags that break strict decoding |
 | Resolve pages     | Walk `docs_dir`, apply `exclude_docs`, map `nav:` onto files | Gives every page a title and a breadcrumb; pages absent from nav are kept but flagged `in_nav: false`               |
 | Split pages       | Strip front matter, cut at ATX headings                      | Fenced code blocks are tracked, so a `# comment` in a shell example is not mistaken for a heading                   |
@@ -148,6 +166,7 @@ domains, at the cost of a second deployment.
 | Package              | Responsibility                                                  |
 |----------------------|-----------------------------------------------------------------|
 | `internal/web`       | Site manifest, ETags, gzip, security headers, cache policy, 404 |
+| `internal/authz`     | Zones, host matching, credentials, challenges, resource metadata |
 | `internal/mkdocs`    | Configuration, navigation, Markdown sectioning, anchors         |
 | `internal/index`     | Tokeniser, BM25 index, snippet extraction                       |
 | `internal/mcpserver` | Tool and resource definitions, payload shapes, error wording    |
@@ -158,6 +177,12 @@ The dependency direction is one way: `mcpserver` uses `mkdocs` and `index`;
 `web` knows about neither; none of the three knows MCP or HTTP routing exists
 above it. Swapping the protocol layer, or reusing the indexer elsewhere,
 touches nothing below it.
+
+`authz` is the same shape from the other side: it is `http.Handler` middleware
+that knows nothing about documentation, and neither `web` nor `mcpserver` knows
+it exists. The cache-policy downgrade in a restricted zone is done by rewriting
+the header on the way out rather than by telling `web` about zones, which is
+why one is still readable without the other.
 
 ## Cost at rest
 

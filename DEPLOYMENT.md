@@ -64,7 +64,7 @@ project bakes itself in and ships one self-contained image:
 
 ```dockerfile
 ARG PYTHON_IMAGE=python:3.13-slim
-ARG MKDOCSGO_IMAGE=ghcr.io/kinjelom/mkdocsgo:0.1.1
+ARG MKDOCSGO_IMAGE=ghcr.io/kinjelom/mkdocsgo:0.2.0
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
 FROM ${PYTHON_IMAGE} AS site
@@ -362,14 +362,29 @@ proxy - and doing it twice buys nothing.
 
 ## Security posture
 
-**No authentication, by design.** Everything served is read-only and the
-documentation is already published. If it is not public, put the server behind
-what the platform provides - a Cloud Foundry route with an authenticating
-gateway, an Ingress with OIDC, a reverse proxy.
+**Public unless a zone says otherwise.** Everything served is read-only. A
+project with no `mkdocsgo.yml` serves every address to everyone, as before; one
+with zones can make an internet route ask for credentials while an intranet
+route does not. The format, and what a restricted zone changes, are in
+[AUTH.md](./AUTH.md).
 
-The 2026-07-28 `Mcp-Method` and `Mcp-Name` headers let a gateway authorise
-without parsing request bodies, so authentication can be added in front without
-touching this code.
+Three things follow for a deployment:
+
+- **Every route that reaches the application needs a zone**, or it answers 403.
+  That is the point - a stale DNS record is not a way in - but it means the
+  route list in a manifest and the `hosts:` list in `mkdocsgo.yml` describe the
+  same thing, so generate the first from the second rather than keeping two
+  copies.
+- **A restricted zone wants more memory.** Verifying an Argon2id password costs
+  19 MiB, two at a time, on top of the site held gzipped. 128 MiB is enough for
+  a public site and tight for a restricted one; 192 MiB is not.
+- **Basic auth over plain HTTP is a password in clear text.** TLS still
+  terminates in front, and a restricted zone without it is a mistake this
+  server cannot detect.
+
+Putting authentication in front of the server instead remains entirely
+possible: the 2026-07-28 `Mcp-Method` and `Mcp-Name` headers let a gateway
+authorise without parsing request bodies.
 
 **`Origin` is validated on `/mcp`** - DNS-rebinding defence, not access
 control. Requests with no `Origin` (every non-browser MCP client) pass,
