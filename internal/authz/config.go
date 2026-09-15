@@ -47,6 +47,7 @@ type Config struct {
 
 	exact     map[string]*Zone
 	wildcards []*Zone
+	suffixes  []*Zone
 	catchAll  *Zone
 }
 
@@ -60,9 +61,11 @@ type Zone struct {
 
 	Name    string `yaml:"-"`
 	members []*Principal
-	// patterns holds the wildcard suffixes of this zone, longest first, so
-	// that *.docs.example.com is tried before *.example.com.
+	// patterns holds this zone's one-label wildcards as the suffix they match
+	// on: "*.docs.example.com" is held as ".docs.example.com".
 	patterns []string
+	// suffixes holds its any-depth wildcards the same way: "**.in" as ".in".
+	suffixes []string
 }
 
 // Principal is one named identity: a person with a password, a machine with a
@@ -173,9 +176,13 @@ func (c *Config) validate() error {
 	}
 
 	// Longest suffix first: *.docs.example.com must win over *.example.com
-	// whatever order the file happens to list the zones in.
+	// whatever order the file happens to list the zones in, and **.i6e.in over
+	// **.in.
 	sort.SliceStable(c.wildcards, func(i, j int) bool {
-		return longestPattern(c.wildcards[i]) > longestPattern(c.wildcards[j])
+		return longest(c.wildcards[i].patterns) > longest(c.wildcards[j].patterns)
+	})
+	sort.SliceStable(c.suffixes, func(i, j int) bool {
+		return longest(c.suffixes[i].suffixes) > longest(c.suffixes[j].suffixes)
 	})
 	return nil
 }
@@ -211,6 +218,11 @@ func (c *Config) validateZone(zone *Zone, hostOwner map[string]string, used map[
 				return fmt.Errorf(`hosts: a second catch-all "*" - zone %q already has one`, c.catchAll.Name)
 			}
 			c.catchAll = zone
+		case strings.HasPrefix(pattern, "**."):
+			zone.suffixes = append(zone.suffixes, pattern[2:]) // ".in"
+			if !containsZone(c.suffixes, zone) {
+				c.suffixes = append(c.suffixes, zone)
+			}
 		case strings.HasPrefix(pattern, "*."):
 			zone.patterns = append(zone.patterns, pattern[1:]) // ".docs.example.com"
 			if !containsZone(c.wildcards, zone) {
@@ -292,8 +304,9 @@ func (p *Principal) validate() error {
 }
 
 // Zone resolves a host to its zone. The most specific pattern wins, whatever
-// order the file lists them in: an exact host, then the longest matching
-// wildcard, then a catch-all if one was declared.
+// order the file lists them in: an exact host, then the longest one-label
+// wildcard, then the longest any-depth suffix, then a catch-all if one was
+// declared.
 func (c *Config) Zone(host string) (*Zone, bool) {
 	if c == nil {
 		return nil, false
@@ -304,6 +317,13 @@ func (c *Config) Zone(host string) (*Zone, bool) {
 	for _, zone := range c.wildcards {
 		for _, suffix := range zone.patterns {
 			if matchesWildcard(host, suffix) {
+				return zone, true
+			}
+		}
+	}
+	for _, zone := range c.suffixes {
+		for _, suffix := range zone.suffixes {
+			if matchesSuffix(host, suffix) {
 				return zone, true
 			}
 		}
@@ -344,9 +364,17 @@ func matchesWildcard(host, suffix string) bool {
 	return label != "" && !strings.Contains(label, ".")
 }
 
-func longestPattern(z *Zone) int {
+// matchesSuffix reports whether host sits anywhere under suffix, which starts
+// with a dot. `**.in` covers a.in and a.b.c.in alike: that is what makes a
+// policy such as "every internal foundation" survive a route nobody has
+// created yet, and why it is spelled differently from the one-label `*.`.
+func matchesSuffix(host, suffix string) bool {
+	return strings.HasSuffix(host, suffix) && len(host) > len(suffix)
+}
+
+func longest(patterns []string) int {
 	longest := 0
-	for _, pattern := range z.patterns {
+	for _, pattern := range patterns {
 		if len(pattern) > longest {
 			longest = len(pattern)
 		}
@@ -389,6 +417,14 @@ func validHostPattern(pattern string) error {
 	case pattern == "":
 		return fmt.Errorf("empty")
 	case pattern == "*":
+		return nil
+	case strings.HasPrefix(pattern, "**."):
+		if strings.Contains(pattern[3:], "*") {
+			return fmt.Errorf("only one wildcard, and only as the first label")
+		}
+		if pattern[3:] == "" {
+			return fmt.Errorf("a wildcard needs a domain under it")
+		}
 		return nil
 	case strings.HasPrefix(pattern, "*."):
 		if strings.Contains(pattern[2:], "*") {

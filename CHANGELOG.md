@@ -12,6 +12,19 @@ change, not at release time.
 
 ## [Unreleased]
 
+### Added
+
+- **`**.` matches a domain at any depth**, next to `*.`, which still matches
+  exactly one label. `**.in` covers `a.in` and `a.b.c.in` alike, and the longest
+  suffix still wins, so `**.cfp1.i6e.in` beats `**.in`.
+
+  It is for a policy stated in terms of a domain rather than a host - every
+  internal foundation is internal, everything on the public one asks for
+  credentials - where the alternative is listing foundations as they are
+  created and having the newest one answer 403 until somebody notices. Spelled
+  with two stars because the wide match is the one worth writing on purpose:
+  nothing that already used `*.` changes meaning.
+
 ## [0.2.0] - 2026-09-15
 
 ### Added

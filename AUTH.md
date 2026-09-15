@@ -103,12 +103,23 @@ policy is not noticed.
 The most specific pattern wins, whatever order the file lists zones in:
 
 1. an exact host - `docs.example.com`
-2. a wildcard, longest suffix first - `*.docs.example.com` before `*.example.com`
-3. the catch-all `"*"`, if one is written
+2. a one-label wildcard, longest first - `*.docs.example.com` before `*.example.com`
+3. a domain suffix, longest first - `**.cfp1.i6e.in` before `**.in`
+4. the catch-all `"*"`, if one is written
 
-`*` stands for **exactly one label**: `*.docs.example.com` covers
-`a.docs.example.com` and not `a.b.docs.example.com`, because a wildcard that
-swallowed any depth would hand a subtree to whoever can create a name in it.
+| Pattern | Covers | Does not cover |
+|---|---|---|
+| `docs.example.com` | that host | anything else |
+| `*.docs.example.com` | `a.docs.example.com` | `a.b.docs.example.com` |
+| `**.in` | `a.in`, `a.b.c.in` | `in`, `a.internal` |
+| `*` | everything left | - |
+
+`*` stands for **exactly one label**, because a wildcard that swallowed any
+depth would hand a subtree to whoever can create a name in it. `**` is that
+wider match, spelled differently so it cannot be written by accident: it is for
+a policy stated in terms of a domain - "every internal foundation is internal"
+- which is the case where a route nobody has created yet should already be
+covered by the right zone.
 
 **An address no zone claims gets 403.** Fail closed: a stale DNS record
 pointing at the application is far likelier than a zone somebody forgot.

@@ -234,3 +234,44 @@ func TestAnEmptyZoneOrPrincipalIsAnError(t *testing.T) {
 		}
 	}
 }
+
+func TestASuffixWildcardCoversAnyDepth(t *testing.T) {
+	config := mustParse(t, `version: 1
+zones:
+  internal:
+    hosts: ["**.in"]
+    access: public
+  cloud:
+    hosts: ["**.cloud"]
+    access: off
+  onefoundation:
+    hosts: ["**.cfp1.i6e.in"]
+    access: off
+  onelabel:
+    hosts: ["*.example.com"]
+    access: public
+`)
+	for host, want := range map[string]string{
+		"it-organization.cfdev1.i6e.in": "internal",
+		"docs.i6e.in":                   "internal",
+		"anything.in":                   "internal",
+		"it-organization.cfp1.i6e.in":   "onefoundation", // the longer suffix wins
+		"docs.cfdev1.i6e.cloud":         "cloud",
+		"one.example.com":               "onelabel", // a one-label wildcard beats a suffix
+	} {
+		zone, ok := config.Zone(host)
+		if !ok {
+			t.Fatalf("%s matched no zone", host)
+		}
+		if zone.Name != want {
+			t.Errorf("%s matched zone %q, want %q", host, zone.Name, want)
+		}
+	}
+
+	// The bare suffix is not a host, and nothing outside it matches at all.
+	for _, host := range []string{"in", "example.org"} {
+		if zone, ok := config.Zone(host); ok {
+			t.Errorf("%s matched zone %q, want no match", host, zone.Name)
+		}
+	}
+}
