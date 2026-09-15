@@ -92,10 +92,10 @@ parsing bodies.
 
 ## Alternatives considered
 
-| Alternative | Why not |
-|---|---|
-| oauth2-proxy or Authelia in front | Solves the browser well and Keycloak immediately, but redirects instead of challenging on `/mcp`, and moves the policy out of the repository that owns the addresses. Kept as the intended route for the browser half later, through a `forwarded` method |
-| Ingress / ForwardAuth / Istio policy | Declarative and per-host, but unavailable on Cloud Foundry and different in every environment |
-| Zones that also scope content | Rejected: `search_index.json` and the sitemap would have to be rebuilt per zone. Separate builds do this correctly and cost nothing but a pipeline |
-| Encrypted credentials file (`*.enc.yaml`, SOPS + age) | Rejected in favour of storing hashes: encryption would have been the only barrier, and it adds a key to manage in every environment. Hashing removes the secret instead of hiding it |
-| An `X-API-Key` header for agents | Rejected: not in the MCP specification, not in any client's discovery path, and a second way in is a second way to get the policy wrong |
+| Alternative                                           | Why not                                                                                                                                                                                                                                                   |
+|-------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| oauth2-proxy or Authelia in front                     | Solves the browser well and Keycloak immediately, but redirects instead of challenging on `/mcp`, and moves the policy out of the repository that owns the addresses. Kept as the intended route for the browser half later, through a `forwarded` method |
+| Ingress / ForwardAuth / Istio policy                  | Declarative and per-host, but unavailable on Cloud Foundry and different in every environment                                                                                                                                                             |
+| Zones that also scope content                         | Rejected: `search_index.json` and the sitemap would have to be rebuilt per zone. Separate builds do this correctly and cost nothing but a pipeline                                                                                                        |
+| Encrypted credentials file (`*.enc.yaml`, SOPS + age) | Rejected in favour of storing hashes: encryption would have been the only barrier, and it adds a key to manage in every environment. Hashing removes the secret instead of hiding it                                                                      |
+| An `X-API-Key` header for agents                      | Rejected: not in the MCP specification, not in any client's discovery path, and a second way in is a second way to get the policy wrong                                                                                                                   |
