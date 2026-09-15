@@ -12,7 +12,7 @@ a password and an agent for a bearer token.
 is built; this binary serves what came out, plus a full-text index over the
 Markdown sources. No Python, no plugins and no build step at run time.
 
-> **Status: 0.2.0, an early release.** It runs, it is tested, and it serves a
+> **Status: 0.3.0, an early release.** It runs, it is tested, and it serves a
 > real documentation site. While the version is `0.x` the flag surface and the
 > MCP payload shapes may still change; the changelog will say when they do.
 
@@ -38,7 +38,7 @@ Cloud Foundry manifests and the Kubernetes manifests filled in:
 **A release binary.** No toolchain, and the checksum is published beside it:
 
 ```bash
-VERSION=0.2.0
+VERSION=0.3.0
 curl -fsSLO "https://github.com/kinjelom/mkdocsgo/releases/download/v${VERSION}/mkdocsgo_${VERSION}_linux_amd64.tar.gz"
 curl -fsSLO "https://github.com/kinjelom/mkdocsgo/releases/download/v${VERSION}/mkdocsgo_${VERSION}_checksums.txt"
 sha256sum --check --ignore-missing "mkdocsgo_${VERSION}_checksums.txt"
@@ -50,7 +50,7 @@ Archives exist for linux, darwin and windows, amd64 and arm64.
 **A container image:**
 
 ```bash
-docker pull ghcr.io/kinjelom/mkdocsgo:0.2.0
+docker pull ghcr.io/kinjelom/mkdocsgo:0.3.0
 ```
 
 **From source**, if you have Go 1.25 or newer:
@@ -115,7 +115,7 @@ fetches the right toolchain by itself.
 
 ```bash
 scripts/image.sh
-docker run --rm -p 8080:8080 -v "$PWD:/project:ro" ghcr.io/kinjelom/mkdocsgo:0.2.0
+docker run --rm -p 8080:8080 -v "$PWD:/project:ro" ghcr.io/kinjelom/mkdocsgo:0.3.0
 ```
 
 ## Releasing
