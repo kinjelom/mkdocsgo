@@ -12,6 +12,8 @@ change, not at release time.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-15
+
 ### Added
 
 - **Zones**: `mkdocsgo.yml` beside `mkdocs.yml` maps the addresses the server
