@@ -12,6 +12,8 @@ change, not at release time.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-15
+
 ### Added
 
 - **`**.` matches a domain at any depth**, next to `*.`, which still matches
