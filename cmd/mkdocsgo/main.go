@@ -14,8 +14,10 @@
 //
 // Access is governed by zones, when the project has an mkdocsgo.yml: the
 // address a request arrived at selects a policy, and a restricted zone asks a
-// browser for HTTP Basic credentials and an agent for a bearer token. A
-// project without that file serves everything publicly, as before. Origin
+// browser for HTTP Basic credentials and an agent for a bearer token - one it
+// was given, or one it got by signing in through the built-in OAuth
+// authorization server, which is how claude.ai connects. A project without
+// that file serves everything publicly, as before. Origin
 // validation on /mcp is unchanged and unrelated: that is DNS-rebinding
 // defence, not access control.
 package main
@@ -175,6 +177,14 @@ func run(cfg config, logger *log.Logger) error {
 	zones, err := loadZones(cfg)
 	if err != nil {
 		return err
+	}
+	// Only /mcp over HTTP can use the authorization server, so only then is
+	// its key required: a site-only deployment or a stdio process with the
+	// same mkdocsgo.yml has no use for it.
+	if servesMCP && cfg.httpAddr != "" {
+		if err := zones.UseOAuthKey(os.Getenv(authz.OAuthKeyVariable)); err != nil {
+			return fmt.Errorf("cannot start the OAuth authorization server: %w", err)
+		}
 	}
 
 	var site *web.Site
@@ -364,6 +374,17 @@ func serveHTTP(ctx context.Context, logger *log.Logger, cfg config, zones *authz
 		// attempt is rejected before it can make the process spend anything
 		// on verifying a credential.
 		mux.Handle("/mcp", guardOrigin(cfg.origins, zones.Middleware(authz.SurfaceMCP, handler)))
+
+		if zones.OAuthEnabled() {
+			// Outside every zone and outside the origin guard, like the
+			// metadata: a client comes here because it has no credentials
+			// yet, and the sign-in form is a page in the person's browser,
+			// posting back to its own origin.
+			oauth := zones.OAuthHandler()
+			for _, path := range authz.OAuthPaths {
+				mux.Handle(path, oauth)
+			}
+		}
 	}
 	if site != nil {
 		mux.Handle("/", zones.Middleware(authz.SurfaceSite, site.Handler()))

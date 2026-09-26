@@ -11,14 +11,16 @@
 //
 // Two surfaces, one policy. A browser authenticates with HTTP Basic, an agent
 // with a bearer token, and both resolve to the same Identity so the access log
-// says one thing. The Authenticate signature deliberately matches the shape of
-// the MCP Go SDK's TokenVerifier, because the next step for the bearer half is
-// a JWT verified against Keycloak's JWKS rather than a hash from a file.
+// says one thing. An agent's token is either one it was handed - a hash in the
+// file - or one it got from the built-in OAuth authorization server by having
+// a principal sign in, which is how a client that cannot be handed a header,
+// such as claude.ai, connects. See oauth.go.
 //
-// Nothing here is secret. The configuration holds hashes: an Argon2id PHC
-// string for a password, a SHA-256 digest for a token. A leaked copy of the
-// file is not a leaked credential, which is why there is no encryption layer
-// to manage, rotate or lose.
+// Nothing in the file is secret. The configuration holds hashes: an Argon2id
+// PHC string for a password, a SHA-256 digest for a token. A leaked copy of
+// the file is not a leaked credential, which is why there is no encryption
+// layer to manage, rotate or lose. The one secret is the key OAuth signs with,
+// and it lives in the environment, not in the file.
 package authz
 
 import (
@@ -46,7 +48,7 @@ type Identity struct {
 	Zone       string
 	Principal  string
 	Method     string
-	Credential string // "password", or the token's id
+	Credential string // "password", the token's id, or "oauth"
 }
 
 // LogFields renders the identity the way the access log prints it.

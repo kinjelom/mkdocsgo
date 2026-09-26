@@ -39,6 +39,7 @@ const MethodStatic = "static"
 type Config struct {
 	Version            int                   `yaml:"version"`
 	TrustForwardedHost bool                  `yaml:"trust_forwarded_host"`
+	OAuth              *OAuthSettings        `yaml:"oauth"`
 	Zones              map[string]*Zone      `yaml:"zones"`
 	Principals         map[string]*Principal `yaml:"principals"`
 
@@ -49,6 +50,9 @@ type Config struct {
 	wildcards []*Zone
 	suffixes  []*Zone
 	catchAll  *Zone
+	// server is the built-in authorization server, once UseOAuthKey has
+	// armed it. Nil until then, and nil for good when no zone asks for OAuth.
+	server *authServer
 }
 
 // Zone is one access policy and the addresses it applies to.
@@ -58,9 +62,14 @@ type Zone struct {
 	Realm      string   `yaml:"realm"`
 	Method     string   `yaml:"method"`
 	Principals []string `yaml:"principals"`
+	// OAuth lets an MCP client sign in as one of the zone's principals through
+	// the built-in authorization server, instead of being handed a token.
+	OAuth bool `yaml:"oauth"`
 
 	Name    string `yaml:"-"`
 	members []*Principal
+	// server is set when OAuth is on and the server has a key to sign with.
+	server *authServer
 	// patterns holds this zone's one-label wildcards as the suffix they match
 	// on: "*.docs.example.com" is held as ".docs.example.com".
 	patterns []string
@@ -76,6 +85,9 @@ type Principal struct {
 	Tokens   []*Token `yaml:"tokens"`
 
 	Name string `yaml:"-"`
+	// stamp fingerprints the password hash. Everything OAuth issued carries
+	// it, so changing the password in the file signs every client out.
+	stamp string
 }
 
 // Token is one bearer credential. The secret itself was printed once by
@@ -175,6 +187,20 @@ func (c *Config) validate() error {
 		}
 	}
 
+	// The same reasoning as for a principal: settings nothing uses read as a
+	// policy in force, and are not.
+	switch {
+	case c.usesOAuth():
+		if c.OAuth == nil {
+			c.OAuth = &OAuthSettings{}
+		}
+		if err := c.OAuth.validate(); err != nil {
+			return fmt.Errorf("oauth: %w", err)
+		}
+	case c.OAuth != nil:
+		return fmt.Errorf("oauth: settings are given but no zone has oauth: true")
+	}
+
 	// Longest suffix first: *.docs.example.com must win over *.example.com
 	// whatever order the file happens to list the zones in, and **.i6e.in over
 	// **.in.
@@ -245,6 +271,9 @@ func (c *Config) validateZone(zone *Zone, hostOwner map[string]string, used map[
 		if len(zone.Principals) > 0 {
 			return fmt.Errorf("principals are listed but access is %q, so nobody is ever asked for them", zone.Access)
 		}
+		if zone.OAuth {
+			return fmt.Errorf("oauth is on but access is %q, so nobody is ever asked to sign in", zone.Access)
+		}
 		return nil
 	}
 
@@ -258,6 +287,9 @@ func (c *Config) validateZone(zone *Zone, hostOwner map[string]string, used map[
 		}
 		zone.members = append(zone.members, principal)
 		used[name] = true
+	}
+	if zone.OAuth && !zone.hasPassword() {
+		return fmt.Errorf("oauth signs a client in with a principal's password, and no principal of this zone has one")
 	}
 	if zone.Realm == "" {
 		zone.Realm = zone.Name
@@ -273,6 +305,7 @@ func (p *Principal) validate() error {
 		if err := checkPasswordHash(p.Password); err != nil {
 			return fmt.Errorf("password: %w", err)
 		}
+		p.stamp = passwordStamp(p.Password)
 	}
 	seen := map[string]bool{}
 	for _, token := range p.Tokens {
@@ -298,6 +331,36 @@ func (p *Principal) validate() error {
 			// reads as a last day of validity, not as a deadline at midnight
 			// the night before.
 			token.expires = day.AddDate(0, 0, 1)
+		}
+	}
+	return nil
+}
+
+// usesOAuth reports whether any zone asks for the authorization server.
+func (c *Config) usesOAuth() bool {
+	for _, zone := range c.Zones {
+		if zone != nil && zone.OAuth {
+			return true
+		}
+	}
+	return false
+}
+
+// hasPassword reports whether any member could sign in through a form.
+func (z *Zone) hasPassword() bool {
+	for _, principal := range z.members {
+		if principal.Password != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// member returns the zone's principal of that name, or nil.
+func (z *Zone) member(name string) *Principal {
+	for _, principal := range z.members {
+		if principal.Name == name {
+			return principal
 		}
 	}
 	return nil
@@ -344,7 +407,11 @@ func (c *Config) Summary() string {
 		zone := c.Zones[name]
 		part := fmt.Sprintf("%s %s", name, zone.Access)
 		if zone.Restricted() {
-			part += fmt.Sprintf(" (%d principals)", len(zone.members))
+			part += fmt.Sprintf(" (%d principals", len(zone.members))
+			if zone.server != nil {
+				part += ", oauth"
+			}
+			part += ")"
 		}
 		parts = append(parts, part)
 	}

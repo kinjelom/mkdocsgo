@@ -6,7 +6,9 @@ process and one port. One static Go binary.
 
 Public by default. A project that needs an intranet address and an internet one
 to behave differently declares zones, and a restricted zone asks a browser for
-a password and an agent for a bearer token.
+a password and an agent for a bearer token - one it was handed, or one it got by
+signing in through the OAuth server built into the binary, which is how
+claude.ai connects.
 
 **MkDocs itself is not in the runtime.** Python builds the site when the image
 is built; this binary serves what came out, plus a full-text index over the
@@ -22,7 +24,7 @@ Markdown sources. No Python, no plugins and no build step at run time.
 |----------------------------------------------------|--------------------------------------|
 | Serving the site: ETags, compression, cache policy | [SERVING.md](./SERVING.md)           |
 | MCP: tools, search, anchors, origin validation     | [MCP.md](./MCP.md)                   |
-| Zones: who may reach which address                 | [AUTH.md](./AUTH.md)                 |
+| Zones: who may reach what; OAuth for Claude        | [AUTH.md](./AUTH.md)                 |
 | How it works inside                                | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Docker, Cloud Foundry, Kubernetes                  | [DEPLOYMENT.md](./DEPLOYMENT.md)     |
 | What it replaces, and what it costs                | [COMPARISON.md](./COMPARISON.md)     |
@@ -96,6 +98,10 @@ client launches. Every other mode needs `-http`.
 
 The last two exist because the runtime image is distroless: no shell, no
 `curl`, no `wget`. The binary probes itself.
+
+One more environment variable besides the port: `MKDOCSGO_OAUTH_KEY`, the key
+a zone with `oauth: true` signs its tokens with - at least 32 random
+characters, the same on every instance. See [AUTH.md](./AUTH.md#signing-in-from-claudeai-oauth).
 
 ## Build and run
 

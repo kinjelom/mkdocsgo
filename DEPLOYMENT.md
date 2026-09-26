@@ -252,12 +252,40 @@ Two instances for anything with a route people depend on: the ETags are content
 hashes, so two replicas of the same build agree on them and a client that
 reaches a different instance does not re-download.
 
+### The OAuth key
+
+A zone with `oauth: true` needs `MKDOCSGO_OAUTH_KEY` - the same value on every
+instance, since a sign-in that starts on one finishes on another. It is a
+secret, so it stays out of the manifest, which is committed:
+
+```bash
+cf set-env mkdocsgo-example MKDOCSGO_OAUTH_KEY "$(openssl rand -base64 32)"
+cf restart mkdocsgo-example
+```
+
+`cf set-env` survives later pushes. A pipeline that pushes from scratch can
+pass it as a manifest variable, `MKDOCSGO_OAUTH_KEY: ((oauth_key))` under
+`env:`, filled from its secret store with `--var` - never from a vars file in
+the repository. Changing the key signs everyone out, and nothing else.
+
 ---
 
 ## 3. Kubernetes
 
-Nothing unusual: it is a stateless, read-only process with no volumes, no
-secrets and no writes.
+Nothing unusual: it is a stateless, read-only process with no volumes and no
+writes - and no secrets, unless a zone uses OAuth. Then it has one, the key,
+which goes into the environment from a Secret:
+
+```bash
+kubectl create secret generic mkdocsgo-example --from-literal=oauth-key="$(openssl rand -base64 32)"
+```
+
+```yaml
+          env:
+            - name: MKDOCSGO_OAUTH_KEY
+              valueFrom:
+                secretKeyRef: {name: mkdocsgo-example, key: oauth-key}
+```
 
 ```yaml
 apiVersion: apps/v1
@@ -381,6 +409,14 @@ Three things follow for a deployment:
 - **Basic auth over plain HTTP is a password in clear text.** TLS still
   terminates in front, and a restricted zone without it is a mistake this
   server cannot detect.
+- **A zone with `oauth: true` needs `MKDOCSGO_OAUTH_KEY`**, the same on every
+  instance, or the server will not start. It is the only secret; the file
+  stays free of them.
+- **claude.ai must reach the route from the internet.** It connects from
+  Anthropic's network (`160.79.104.0/21`) and refuses names that resolve to
+  private addresses, so an intranet-only route cannot be a claude.ai
+  connector. A WAF in front must let that range through to `/mcp`,
+  `/.well-known/` and `/oauth/`.
 
 Putting authentication in front of the server instead remains entirely
 possible: the 2026-07-28 `Mcp-Method` and `Mcp-Name` headers let a gateway

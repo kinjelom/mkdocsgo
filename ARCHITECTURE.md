@@ -67,7 +67,7 @@ flowchart TB
 
     req --> logm --> rec --> mux
     mux -->|/healthz| ok["200 ok"]
-    mux -->|/.well-known| prm["resource metadata"]
+    mux -->|/.well-known, /oauth| prm["resource metadata<br/>OAuth: sign-in, tokens"]
     mux -->|/mcp| guard --> zone
     mux -->|everything else| zone
     zone -->|restricted| cred
@@ -79,9 +79,12 @@ flowchart TB
     tools --> idx
 ```
 
-`/healthz` and the metadata document sit outside the zone check on purpose: a
-platform probe arrives at the container's address rather than at a route, and a
-client reads the metadata in order to learn how to authenticate. The origin
+`/healthz`, the metadata documents and the OAuth endpoints sit outside the zone
+check on purpose: a platform probe arrives at the container's address rather
+than at a route, and a client comes to the rest in order to learn how to
+authenticate, or to do it. The OAuth endpoints answer only on a host whose zone
+has `oauth: true`, and store nothing: what they issue is sealed with a key from
+the environment, so any instance accepts what another issued. The origin
 guard stays outside it too, so a DNS-rebinding attempt never reaches a password
 hash.
 
@@ -91,15 +94,15 @@ registered at all: neither is a runtime check.
 
 ## Startup
 
-| Step              | What happens                                                 | Why it is not obvious                                                                                               |
-|-------------------|--------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
-| Read `mkdocsgo.yml` | Zones, principals, credential hashes                       | First, and strict: a configuration error costs a second rather than the time to hash and compress a whole site first. A restricted zone that could never let anyone in stops the server |
-| Read `mkdocs.yml` | Decoded into a `yaml.Node`                                   | A plain map loses nav ordering, and `mkdocs.yml` routinely carries `!!python/name:` tags that break strict decoding |
-| Resolve pages     | Walk `docs_dir`, apply `exclude_docs`, map `nav:` onto files | Gives every page a title and a breadcrumb; pages absent from nav are kept but flagged `in_nav: false`               |
-| Split pages       | Strip front matter, cut at ATX headings                      | Fenced code blocks are tracked, so a `# comment` in a shell example is not mistaken for a heading                   |
-| Compute anchors   | Reproduce Python-Markdown's `toc` slug                       | So a returned anchor is the same fragment the published site uses                                                   |
-| Build the index   | One BM25 document per section, heading terms weighted        | Sections, not pages, are what an agent should receive                                                               |
-| Index the site    | Hash every file, compress what compresses                    | The hash becomes the ETag; compressing once beats compressing per request                                           |
+| Step                | What happens                                                                 | Why it is not obvious                                                                                                                                                                   |
+|---------------------|------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Read `mkdocsgo.yml` | Zones, principals, credential hashes, and the OAuth key from the environment | First, and strict: a configuration error costs a second rather than the time to hash and compress a whole site first. A restricted zone that could never let anyone in stops the server |
+| Read `mkdocs.yml`   | Decoded into a `yaml.Node`                                                   | A plain map loses nav ordering, and `mkdocs.yml` routinely carries `!!python/name:` tags that break strict decoding                                                                     |
+| Resolve pages       | Walk `docs_dir`, apply `exclude_docs`, map `nav:` onto files                 | Gives every page a title and a breadcrumb; pages absent from nav are kept but flagged `in_nav: false`                                                                                   |
+| Split pages         | Strip front matter, cut at ATX headings                                      | Fenced code blocks are tracked, so a `# comment` in a shell example is not mistaken for a heading                                                                                       |
+| Compute anchors     | Reproduce Python-Markdown's `toc` slug                                       | So a returned anchor is the same fragment the published site uses                                                                                                                       |
+| Build the index     | One BM25 document per section, heading terms weighted                        | Sections, not pages, are what an agent should receive                                                                                                                                   |
+| Index the site      | Hash every file, compress what compresses                                    | The hash becomes the ETag; compressing once beats compressing per request                                                                                                               |
 
 Everything above is immutable afterwards, so both halves are read concurrently
 without locking.
@@ -163,15 +166,15 @@ domains, at the cost of a second deployment.
 
 ## Packages
 
-| Package              | Responsibility                                                  |
-|----------------------|-----------------------------------------------------------------|
-| `internal/web`       | Site manifest, ETags, gzip, security headers, cache policy, 404 |
-| `internal/authz`     | Zones, host matching, credentials, challenges, resource metadata |
-| `internal/mkdocs`    | Configuration, navigation, Markdown sectioning, anchors         |
-| `internal/index`     | Tokeniser, BM25 index, snippet extraction                       |
-| `internal/mcpserver` | Tool and resource definitions, payload shapes, error wording    |
-| `cmd/mkdocsgo`       | Flags, modes, routing, middleware, shutdown                     |
-| `cmd/anchorcheck`    | Compares computed anchors against a built site                  |
+| Package              | Responsibility                                                                                   |
+|----------------------|--------------------------------------------------------------------------------------------------|
+| `internal/web`       | Site manifest, ETags, gzip, security headers, cache policy, 404                                  |
+| `internal/authz`     | Zones, host matching, credentials, challenges, resource metadata, the OAuth authorization server |
+| `internal/mkdocs`    | Configuration, navigation, Markdown sectioning, anchors                                          |
+| `internal/index`     | Tokeniser, BM25 index, snippet extraction                                                        |
+| `internal/mcpserver` | Tool and resource definitions, payload shapes, error wording                                     |
+| `cmd/mkdocsgo`       | Flags, modes, routing, middleware, shutdown                                                      |
+| `cmd/anchorcheck`    | Compares computed anchors against a built site                                                   |
 
 The dependency direction is one way: `mcpserver` uses `mkdocs` and `index`;
 `web` knows about neither; none of the three knows MCP or HTTP routing exists

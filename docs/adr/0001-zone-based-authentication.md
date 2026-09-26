@@ -3,6 +3,9 @@
 - **Status:** accepted
 - **Date:** 2026-09-15
 - **Applies to:** mkdocsgo 0.2.0
+- **Extended by:** [0002](./0002-built-in-oauth-for-mcp-clients.md), which
+  fills `authorization_servers` with an authorization server built into the
+  binary
 
 ## Context
 

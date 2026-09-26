@@ -103,7 +103,15 @@ half contributes:
   `WWW-Authenticate: Bearer realm="…", resource_metadata="…"`;
 - that pointer resolves to RFC 9728 protected resource metadata this server
   publishes at `/.well-known/oauth-protected-resource/mcp`, outside the zone,
-  because a client reads it in order to learn how to authenticate.
+  because a client reads it in order to learn how to authenticate;
+- in a zone with `oauth: true` that metadata names an OAuth authorization
+  server built into this binary, so a client can sign in as one of the zone's
+  principals instead of being handed a token. That is how **claude.ai**, Claude
+  Desktop and Claude mobile connect - they take a URL and nothing else - and
+  Claude Code can do the same. See
+  [Signing in from claude.ai](./AUTH.md#signing-in-from-claudeai-oauth).
+
+A client that can set a header can still be handed a static token:
 
 ```json
 { "mcpServers": { "docs": {

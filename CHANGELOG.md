@@ -12,6 +12,41 @@ change, not at release time.
 
 ## [Unreleased]
 
+### Added
+
+- **OAuth sign-in for MCP clients, so claude.ai can connect.** claude.ai,
+  Claude Desktop and Claude mobile add a remote server by its URL and nothing
+  else, so a static token was no way in for them. A zone with `oauth: true` now
+  runs an OAuth 2.1 authorization server inside the binary: RFC 8414 metadata,
+  dynamic client registration (RFC 7591), the authorization code flow with
+  PKCE (S256 only), and refresh. The person signing in is one of the zone's
+  principals, with the password already in `mkdocsgo.yml`. Claude Code signs
+  in the same way, through a loopback redirect on any port, and static tokens
+  keep working beside it.
+- Nothing is stored. Client registrations, codes, access and refresh tokens
+  are sealed with an HMAC under `MKDOCSGO_OAUTH_KEY`, the one secret, which
+  lives in the environment rather than in the file. Any instance accepts what
+  another issued and a restart signs nobody out. Taking a principal out of the
+  zone or changing its password, then restarting, signs out every client it
+  signed in; changing the key signs out everyone.
+- `oauth.redirect_uris` is the allowlist a client registration may name,
+  defaulting to Claude's callback and Claude Code's loopback;
+  `oauth.access_token_ttl` (1 hour) and `oauth.refresh_token_ttl` (30 days)
+  set the lifetimes.
+- `docs/adr/0002-built-in-oauth-for-mcp-clients.md`: why the authorization
+  server is built in and stateless, and what that costs - a secret, no
+  per-token revocation, no refresh-token rotation.
+
+### Changed
+
+- The protected resource metadata of a zone with `oauth: true` names its
+  authorization server in `authorization_servers`.
+- A bearer token presented and refused on `/mcp` gets `error="invalid_token"`
+  in the `WWW-Authenticate` challenge, which tells an OAuth client to refresh
+  rather than start over.
+- A zone with `oauth: true` served over HTTP with `/mcp` will not start without
+  `MKDOCSGO_OAUTH_KEY`, 32 characters or more.
+
 ## [0.3.0] - 2026-09-15
 
 ### Added

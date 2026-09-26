@@ -36,7 +36,8 @@ func (c *Config) Middleware(surface Surface, next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		zone, ok := c.Zone(c.RequestHost(r))
+		host := c.RequestHost(r)
+		zone, ok := c.Zone(host)
 		if !ok {
 			// Fail closed. An address nobody configured is far more likely to
 			// be a stale DNS record or a probe than a zone someone forgot,
@@ -56,7 +57,7 @@ func (c *Config) Middleware(surface Surface, next http.Handler) http.Handler {
 			return
 		}
 
-		identity, presented := zone.authenticate(surface, r)
+		identity, presented := zone.authenticate(surface, r, host)
 		if identity == nil {
 			// The zone is logged even when nobody got in: a run of 401s
 			// against one zone is the thing an audit wants to see.
@@ -70,7 +71,7 @@ func (c *Config) Middleware(surface Surface, next http.Handler) http.Handler {
 				case <-r.Context().Done():
 				}
 			}
-			c.challenge(w, r, zone, surface)
+			c.challenge(w, r, zone, surface, presented)
 			return
 		}
 
@@ -96,7 +97,7 @@ func withIdentity(r *http.Request, id *Identity) *http.Request {
 // authenticate returns who the caller is, or nil, and whether they presented
 // anything at all. It never says why it refused, because the caller is told the
 // same thing either way.
-func (z *Zone) authenticate(surface Surface, r *http.Request) (*Identity, bool) {
+func (z *Zone) authenticate(surface Surface, r *http.Request, host string) (*Identity, bool) {
 	header := r.Header.Get("Authorization")
 	if strings.TrimSpace(header) == "" {
 		return nil, false
@@ -106,7 +107,7 @@ func (z *Zone) authenticate(surface Surface, r *http.Request) (*Identity, bool) 
 
 	switch {
 	case surface == SurfaceMCP && strings.EqualFold(scheme, "bearer"):
-		return z.verifyBearer(credentials), true
+		return z.verifyBearer(credentials, host), true
 	case surface == SurfaceSite && strings.EqualFold(scheme, "basic"):
 		return z.verifyBasic(credentials), true
 	}
@@ -122,21 +123,21 @@ func (z *Zone) verifyBasic(encoded string) *Identity {
 	if !found {
 		return nil
 	}
-	for _, principal := range z.members {
-		if principal.Name != name || principal.Password == "" {
-			continue
-		}
-		if verifyPassword(principal.Password, password) {
-			return &Identity{Zone: z.Name, Principal: principal.Name, Method: z.Method, Credential: "password"}
-		}
+	principal := z.signIn(name, password)
+	if principal == nil {
 		return nil
 	}
-	return nil
+	return &Identity{Zone: z.Name, Principal: principal.Name, Method: z.Method, Credential: "password"}
 }
 
-func (z *Zone) verifyBearer(secret string) *Identity {
+func (z *Zone) verifyBearer(secret, host string) *Identity {
 	if secret == "" {
 		return nil
+	}
+	// A token the authorization server issued is checked by opening it, not
+	// by comparing it with the static ones, which it could never match.
+	if z.server != nil && strings.HasPrefix(secret, accessTokenPrefix) {
+		return z.server.verifyAccess(z, secret, host)
 	}
 	now := time.Now().UTC()
 	// Every token of every member is compared, with no early exit on a match,
@@ -164,13 +165,19 @@ func (z *Zone) verifyBearer(secret string) *Identity {
 
 // challenge is the 401. On /mcp it is the challenge the MCP specification asks
 // for: a bearer scheme and a pointer to this server's protected resource
-// metadata. Today that document says the tokens are issued out of band; when
-// Keycloak arrives it will name the authorization server instead, and a client
-// that already follows the pointer needs no change.
-func (c *Config) challenge(w http.ResponseWriter, r *http.Request, zone *Zone, surface Surface) {
+// metadata. In a zone with `oauth: true` that document names the built-in
+// authorization server, and a client such as claude.ai signs in from there;
+// otherwise it says the tokens are issued out of band.
+//
+// A token that was presented and refused adds error="invalid_token" (RFC 6750),
+// which is what tells an OAuth client to refresh rather than start over.
+func (c *Config) challenge(w http.ResponseWriter, r *http.Request, zone *Zone, surface Surface, presented bool) {
 	if surface == SurfaceMCP {
-		w.Header().Set("WWW-Authenticate", fmt.Sprintf(
-			`Bearer realm=%q, resource_metadata=%q`, zone.Realm, c.metadataURL(r)))
+		challenge := fmt.Sprintf(`Bearer realm=%q, resource_metadata=%q`, zone.Realm, c.metadataURL(r))
+		if presented {
+			challenge += `, error="invalid_token"`
+		}
+		w.Header().Set("WWW-Authenticate", challenge)
 		w.Header().Set("Cache-Control", "no-store")
 		http.Error(w, "authentication required: present a bearer token", http.StatusUnauthorized)
 		return
@@ -200,10 +207,13 @@ func (c *Config) Metadata() http.Handler {
 			"resource_name":            zone.Realm,
 			"bearer_methods_supported": []string{"header"},
 		}
-		// No authorization_servers: with `method: static` there is no OAuth
-		// server to point at, and RFC 9728 makes the field optional precisely
-		// for a resource whose tokens are issued out of band. The field
-		// appears when a zone moves to `method: oidc`.
+		// The built-in authorization server's issuer is this origin. A zone
+		// without it has no OAuth server to point at, and RFC 9728 makes the
+		// field optional precisely for a resource whose tokens are issued out
+		// of band.
+		if zone.server != nil {
+			document["authorization_servers"] = []string{c.origin(r)}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
