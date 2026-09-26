@@ -70,6 +70,11 @@ const (
 // every user of the machine in the process list; the environment is not.
 const metricsPushVariable = "MKDOCSGO_METRICS_PUSH_URL"
 
+// metricsSaltVariable keys the hash -metrics-users hash labels with. Without
+// it the hash is a plain SHA-256 of a principal's name, and the names are in
+// mkdocsgo.yml for anyone who can read the repository.
+const metricsSaltVariable = "MKDOCSGO_METRICS_USER_SALT"
+
 type originList []string
 
 func (o *originList) String() string { return strings.Join(*o, ",") }
@@ -94,6 +99,7 @@ type config struct {
 	metricsInterval time.Duration
 	metricsJob      string
 	metricsInstance string
+	metricsUsers    string
 }
 
 func main() {
@@ -112,6 +118,7 @@ func main() {
 	flag.DurationVar(&cfg.metricsInterval, "metrics-push-interval", 30*time.Second, "how often to push metrics")
 	flag.StringVar(&cfg.metricsJob, "metrics-job", "mkdocsgo", "the job label pushed metrics are grouped under")
 	flag.StringVar(&cfg.metricsInstance, "metrics-instance", "", "the instance label pushed metrics are grouped under; defaults to the host name")
+	flag.StringVar(&cfg.metricsUsers, "metrics-users", "none", "label metrics with who asked: none, name (the principal) or hash (a pseudonym; salted by $"+metricsSaltVariable+")")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	newToken := flag.Bool("new-token", false, "mint a bearer token, print it and the line to paste into "+authz.DefaultFileName+", then quit")
 	hashPassword := flag.Bool("hash-password", false, "hash a password for "+authz.DefaultFileName+", then quit")
@@ -220,9 +227,23 @@ func run(cfg config, logger *log.Logger) error {
 	var meter *metrics.Metrics
 	var exports *metricsExports
 	if cfg.metricsAddr != "" || cfg.metricsPush != "" {
-		meter = metrics.New(version)
+		users, err := metrics.ParseUsers(cfg.metricsUsers)
+		if err != nil {
+			return err
+		}
+		salt := os.Getenv(metricsSaltVariable)
+		meter = metrics.New(version, users, salt)
 		if exports, err = prepareMetrics(cfg, meter, logger); err != nil {
 			return err
+		}
+		switch {
+		case users == metrics.UsersName:
+			logger.Print("metrics: labelled with the name of the principal who asked")
+		case users == metrics.UsersHash && salt != "":
+			logger.Print("metrics: labelled with a salted hash of the principal who asked")
+		case users == metrics.UsersHash:
+			logger.Printf("metrics: labelled with an unsalted hash of the principal who asked - anyone with the names in %s can tell who is who; set $%s to prevent it",
+				authz.DefaultFileName, metricsSaltVariable)
 		}
 	}
 
@@ -415,7 +436,16 @@ func serveHTTP(ctx context.Context, logger *log.Logger, cfg config, zones *authz
 
 	if service != nil {
 		handler := mcp.NewStreamableHTTPHandler(
-			func(*http.Request) *mcp.Server { return newMCPServer(service) },
+			func(r *http.Request) *mcp.Server {
+				// Stateless, so this runs once per request - after the zone
+				// check, whose identity is in the request's context. That is
+				// how a tool call learns who made it, for the metrics' user
+				// label.
+				if meter.LabelsUsers() {
+					return newMCPServer(service.ObservedBy(meter.Caller(meter.User(principalOf(r)))))
+				}
+				return newMCPServer(service)
+			},
 			// Stateless is the sessionless direction of the 2026-07-28 spec:
 			// no Mcp-Session-Id, so any instance answers any request and the
 			// platform needs no session affinity.
@@ -564,17 +594,26 @@ func observe(logger *log.Logger, accessLog bool, meter *metrics.Metrics, mux *ht
 			// series.
 			_, pattern := mux.Handler(r)
 			route := routeOf(pattern)
-			zone := ""
+			zone, principal := "", ""
 			if who != nil {
-				zone = who.Zone
+				zone, principal = who.Zone, who.Principal
 			}
-			meter.HTTPRequest(route, zone, rec.status, int64(rec.bytes), took)
+			user := meter.User(principal)
+			meter.HTTPRequest(route, zone, user, rec.status, int64(rec.bytes), took)
 			if route == "site" && site != nil {
 				kind, page := site.Describe(r.URL.Path)
-				meter.SiteRequest(kind, page, rec.status)
+				meter.SiteRequest(kind, page, user, rec.status)
 			}
 		}
 	})
+}
+
+// principalOf is who the zone check found behind a request, if anyone.
+func principalOf(r *http.Request) string {
+	if id := authz.IdentityFrom(r.Context()); id != nil {
+		return id.Principal
+	}
+	return ""
 }
 
 // routeOf names the part of the server a mux pattern belongs to.

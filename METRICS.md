@@ -141,6 +141,41 @@ a browser does.
 `zone` is the zone from [AUTH.md](./AUTH.md), empty without an `mkdocsgo.yml`;
 `auth` is the resource metadata and the OAuth endpoints.
 
+## Who read it
+
+Off by default. `-metrics-users` adds a `user` label to the metrics that say
+who read what: `mkdocsgo_http_requests_total`, `mkdocsgo_site_page_views_total`,
+`mkdocsgo_mcp_tool_calls_total`, `mkdocsgo_mcp_page_reads_total` and
+`mkdocsgo_mcp_searches_total`.
+
+| `-metrics-users` | `user` is                                                                         |
+|------------------|-----------------------------------------------------------------------------------|
+| `none`           | absent - the default                                                              |
+| `name`           | the principal from `mkdocsgo.yml`: `partner-a`                                    |
+| `hash`           | 12 hex characters derived from it: `c863be75b501`. One person, one label, no name |
+
+The user is the principal the zone check found - by password, by token, or by
+OAuth sign-in - so a person counts as the same user on the site and on `/mcp`.
+A request nobody authenticated, in a public zone or refused with a `401`, is
+`user=""`.
+
+**A hash is only as private as its salt.** Without one it is a SHA-256 of the
+name, and the names are in `mkdocsgo.yml`: anyone who can read the repository
+can hash them and tell who is who. With `MKDOCSGO_METRICS_USER_SALT` set, the
+hash is an HMAC under it, and only whoever holds the salt can. Keep the salt
+the same everywhere and for as long as you want to follow one person across
+instances and time - changing it gives everyone a new pseudonym. The startup
+log says which of the three you have.
+
+**Mind the count of series.** Page views by user are pages times people: a
+hundred pages read by fifty people is up to five thousand series. That is
+fine for Prometheus, but it is the metric to leave out first if storage is
+tight.
+
+Being able to say who read what is a record about people, and in many places a
+record with rules: purpose, retention, who may see it. The default is off for
+that reason, not for a technical one.
+
 ## What is never a label
 
 **Anything a client typed.** Not a request path - a page that is not in the
@@ -150,22 +185,22 @@ know (it is refused before it is counted). A metric labelled by client input is
 a denial of service against whatever stores it: one scanner walking
 `/wp-admin` variants would mint a series per path.
 
-**Who.** The zone is a label, the principal is not. The access log names the
-principal of every request; a time series per person is a different kind of
-record, and not one to start keeping as a side effect.
-
 **The question.** An empty search is counted; what it was is not stored
 anywhere. `result="empty"` rising says the documentation has a gap, not which.
 
 So the number of series is bounded by the build and the configuration: pages
-times `via`, routes times zones times status codes, kinds times status codes.
-For a site of a hundred pages that is a few hundred series.
+times `via`, routes times zones times status codes, kinds times status codes -
+and, with `-metrics-users`, times the principals in `mkdocsgo.yml`. For a site
+of a hundred pages and no user label that is a few hundred series.
 
 ## Queries worth having
 
 ```promql
 # What people read, this week
 topk(10, sum by (page) (increase(mkdocsgo_site_page_views_total[7d])))
+
+# Who reads the most, on the site and through agents together (-metrics-users)
+topk(10, sum by (user) (increase(mkdocsgo_http_requests_total{route=~"site|mcp", user!=""}[7d])))
 
 # What agents read, this week
 topk(10, sum by (page) (increase(mkdocsgo_mcp_page_reads_total[7d])))

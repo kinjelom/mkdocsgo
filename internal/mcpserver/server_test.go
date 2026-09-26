@@ -361,3 +361,37 @@ func TestTheObserverHearsWhatAgentsAskFor(t *testing.T) {
 		}
 	}
 }
+
+func TestObservedByReportsToAnotherObserver(t *testing.T) {
+	project, err := mkdocs.Load("../../testdata/site")
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	first, second := &recorder{}, &recorder{}
+	service := New(project, Options{Observer: first})
+	observed := service.ObservedBy(second)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "mkdocsgo", Version: "test"}, nil)
+	observed.Register(server)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	defer serverSession.Close()
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "test"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	call(t, session, ctx, "get_page", map[string]any{"path": "index.md"})
+	if !second.saw("read index.md via get_page") {
+		t.Errorf("the new observer heard %q", second.events)
+	}
+	if len(first.events) != 0 {
+		t.Errorf("the original observer heard %q; the copy must not report to it", first.events)
+	}
+}

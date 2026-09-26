@@ -96,6 +96,7 @@ client launches. Every other mode needs `-http`.
 | `-metrics-push-interval` | `30s`                    | How often to push                                                            |
 | `-metrics-job`           | `mkdocsgo`               | The `job` label of pushed metrics                                            |
 | `-metrics-instance`      | host name                | The `instance` label of pushed metrics                                       |
+| `-metrics-users`         | `none`                   | Label metrics with who asked: `none`, `name` or `hash`                       |
 | `-healthcheck`           | -                        | GET a URL, exit 0 on 2xx, then quit; `self` means own `/healthz`             |
 | `-mcp-probe`             | -                        | Ask an MCP endpoint for its tool list, exit 0 if it answers                  |
 | `-new-token`             | -                        | Mint a bearer token, print it and the line to paste, then quit               |
@@ -105,7 +106,7 @@ client launches. Every other mode needs `-http`.
 `-healthcheck` and `-mcp-probe` exist because the runtime image is distroless:
 no shell, no `curl`, no `wget`. The binary probes itself.
 
-Two more environment variables besides the port, both because what they hold
+Three more environment variables besides the port, all because what they hold
 must not appear in the process list:
 
 - `MKDOCSGO_OAUTH_KEY`, the key a zone with `oauth: true` signs its tokens
@@ -113,6 +114,9 @@ must not appear in the process list:
   [AUTH.md](./AUTH.md#signing-in-from-claudeai-oauth).
 - `MKDOCSGO_METRICS_PUSH_URL`, the Pushgateway to push to, when its URL carries
   a password. See [METRICS.md](./METRICS.md#pushing).
+- `MKDOCSGO_METRICS_USER_SALT`, which keys `-metrics-users hash`, so that the
+  pseudonyms cannot be recomputed from the names in `mkdocsgo.yml`. See
+  [METRICS.md](./METRICS.md#who-read-it).
 
 ## Build and run
 

@@ -123,6 +123,15 @@ func New(project *mkdocs.Project, opts Options) *Service {
 	return &Service{project: project, ix: index.Build(docs), opts: opts, observer: observer}
 }
 
+// ObservedBy returns the service with another observer: the same project and
+// index, reported to someone else. The HTTP handler builds a server for every
+// request, and with it an observer that knows who is asking.
+func (s *Service) ObservedBy(observer Observer) *Service {
+	observed := *s
+	observed.observer = observer
+	return &observed
+}
+
 // Sections reports how many indexed units the project produced.
 func (s *Service) Sections() int { return s.ix.Len() }
 

@@ -49,7 +49,7 @@ func TestAPushGoesToTheGroupAndIsDeletedOnShutdown(t *testing.T) {
 	server := httptest.NewServer(gw)
 	defer server.Close()
 
-	m := New("test")
+	m := New("test", UsersNone, "")
 	m.Received("tools/call")
 	base := strings.Replace(server.URL, "http://", "http://pusher:s3cret@", 1) + "/prefix/"
 	pusher, err := NewPusher(m, base, "mkdocsgo", "docs-0", time.Hour, quiet())
@@ -107,7 +107,7 @@ func TestAGroupingValueThatCannotBeAPathSegmentIsEncoded(t *testing.T) {
 		}
 	}
 
-	pusher, err := NewPusher(New("test"), "http://gw:9091", "mkdocsgo", "..", time.Minute, quiet())
+	pusher, err := NewPusher(New("test", UsersNone, ""), "http://gw:9091", "mkdocsgo", "..", time.Minute, quiet())
 	if err != nil {
 		t.Fatalf("NewPusher: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestAGroupingValueThatCannotBeAPathSegmentIsEncoded(t *testing.T) {
 
 func TestABadPushAddressFailsAtStartup(t *testing.T) {
 	for _, base := range []string{"pushgateway:9091", "ftp://gw", "http://gw:9091/?x=1", "http://user:pw@"} {
-		_, err := NewPusher(New("test"), base, "mkdocsgo", "a", time.Minute, quiet())
+		_, err := NewPusher(New("test", UsersNone, ""), base, "mkdocsgo", "a", time.Minute, quiet())
 		if err == nil {
 			t.Errorf("%q was accepted", base)
 			continue
@@ -127,7 +127,7 @@ func TestABadPushAddressFailsAtStartup(t *testing.T) {
 			t.Errorf("the error shows the password: %v", err)
 		}
 	}
-	if _, err := NewPusher(New("test"), "http://gw", "mkdocsgo", "a", time.Millisecond, quiet()); err == nil {
+	if _, err := NewPusher(New("test", UsersNone, ""), "http://gw", "mkdocsgo", "a", time.Millisecond, quiet()); err == nil {
 		t.Error("a one-millisecond interval was accepted")
 	}
 }
@@ -145,7 +145,7 @@ func TestAFailingGatewayIsReportedOnceAndItsRecoveryToo(t *testing.T) {
 		return logged.Write(p)
 	}), "", 0)
 
-	pusher, err := NewPusher(New("test"), server.URL, "mkdocsgo", "a", time.Second, logger)
+	pusher, err := NewPusher(New("test", UsersNone, ""), server.URL, "mkdocsgo", "a", time.Second, logger)
 	if err != nil {
 		t.Fatalf("NewPusher: %v", err)
 	}

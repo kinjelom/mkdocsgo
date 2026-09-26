@@ -28,6 +28,12 @@ change, not at release time.
   and deletes the group on shutdown. The URL may carry Basic credentials and is
   read from `MKDOCSGO_METRICS_PUSH_URL` when the flag is absent, so they stay out
   of the process list. This is how metrics leave a Cloud Foundry instance.
+- `-metrics-users name|hash` labels the metrics that say who read what with
+  the principal behind the request - on the site, and inside MCP tool calls,
+  where the identity from the zone check reaches the tools per request. `hash`
+  is a 12-character pseudonym, keyed by `MKDOCSGO_METRICS_USER_SALT` when set;
+  unsalted, it can be recomputed from the names in `mkdocsgo.yml`, and the
+  startup log says so. Off by default.
 - `METRICS.md`: the metrics, both ways out, and the queries worth having.
 
 - **OAuth sign-in for MCP clients, so claude.ai can connect.** claude.ai,
