@@ -232,6 +232,14 @@ Three things worth knowing:
   you assemble the directory. Set it in the packaging step; a non-executable
   binary fails at start with a permission error and no other clue.
 
+### Metrics
+
+The router balances a route across instances, so Prometheus cannot scrape one
+instance through it. Push instead, to a Pushgateway:
+`MKDOCSGO_METRICS_PUSH_URL` via `cf set-env`, one `-metrics-job` per
+application. [METRICS.md](./METRICS.md#on-cloud-foundry) has the details,
+including a stable `instance` label from `$CF_INSTANCE_INDEX`.
+
 ### Why not the staticfile buildpack
 
 `staticfile_buildpack` is the obvious CF answer for a built MkDocs site, and it
@@ -338,6 +346,11 @@ spec:
 
 The complete set - Deployment, Service, Ingress - is in the example repository
 under `deploy/k8s/`.
+
+For Prometheus, add `-metrics-addr 0.0.0.0:9090` to `args` and a second
+container port, and scrape the pods; [METRICS.md](./METRICS.md#scraping) has
+the snippet. Keep that port out of the Service and the Ingress: it is for
+Prometheus, not for readers.
 
 Notes that are easy to get wrong:
 

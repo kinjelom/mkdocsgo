@@ -20,6 +20,11 @@
 // that file serves everything publicly, as before. Origin
 // validation on /mcp is unchanged and unrelated: that is DNS-rebinding
 // defence, not access control.
+//
+// What is asked for can be counted for Prometheus: which pages people read,
+// which tools agents call and which pages those return. -metrics-addr serves
+// the counts on a listener of their own, -metrics-push sends them to a
+// Pushgateway; with neither, nothing is counted.
 package main
 
 import (
@@ -31,11 +36,13 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -44,6 +51,7 @@ import (
 
 	"github.com/kinjelom/mkdocsgo/internal/authz"
 	"github.com/kinjelom/mkdocsgo/internal/mcpserver"
+	"github.com/kinjelom/mkdocsgo/internal/metrics"
 	"github.com/kinjelom/mkdocsgo/internal/mkdocs"
 	"github.com/kinjelom/mkdocsgo/internal/web"
 )
@@ -56,6 +64,11 @@ const (
 	modeSite = "site"
 	modeMCP  = "mcp"
 )
+
+// metricsPushVariable is where -metrics-push is read from when the flag is
+// not given. A gateway URL may carry a password, and an argument is visible to
+// every user of the machine in the process list; the environment is not.
+const metricsPushVariable = "MKDOCSGO_METRICS_PUSH_URL"
 
 type originList []string
 
@@ -75,6 +88,12 @@ type config struct {
 	noResources bool
 	noAccessLog bool
 	origins     originList
+
+	metricsAddr     string
+	metricsPush     string
+	metricsInterval time.Duration
+	metricsJob      string
+	metricsInstance string
 }
 
 func main() {
@@ -88,12 +107,20 @@ func main() {
 	flag.BoolVar(&cfg.noResources, "no-resources", false, "expose MCP tools only, without one resource per page")
 	flag.BoolVar(&cfg.noAccessLog, "no-access-log", false, "do not log HTTP requests")
 	flag.Var(&cfg.origins, "allow-origin", "additional allowed Origin for /mcp; repeatable")
+	flag.StringVar(&cfg.metricsAddr, "metrics-addr", "", "serve Prometheus metrics at /metrics on this separate address, e.g. 0.0.0.0:9090; off by default")
+	flag.StringVar(&cfg.metricsPush, "metrics-push", "", "push metrics to this Pushgateway, e.g. http://pushgateway:9091; defaults to $"+metricsPushVariable+", off when neither is set")
+	flag.DurationVar(&cfg.metricsInterval, "metrics-push-interval", 30*time.Second, "how often to push metrics")
+	flag.StringVar(&cfg.metricsJob, "metrics-job", "mkdocsgo", "the job label pushed metrics are grouped under")
+	flag.StringVar(&cfg.metricsInstance, "metrics-instance", "", "the instance label pushed metrics are grouped under; defaults to the host name")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	newToken := flag.Bool("new-token", false, "mint a bearer token, print it and the line to paste into "+authz.DefaultFileName+", then quit")
 	hashPassword := flag.Bool("hash-password", false, "hash a password for "+authz.DefaultFileName+", then quit")
 	healthcheck := flag.String("healthcheck", "", "GET this URL, exit 0 if it answers 2xx, then quit; \"self\" means this server's own /healthz")
 	mcpProbe := flag.String("mcp-probe", "", "ask this MCP endpoint for its tool list, exit 0 if it answers with tools, then quit")
 	flag.Parse()
+	if cfg.metricsPush == "" {
+		cfg.metricsPush = strings.TrimSpace(os.Getenv(metricsPushVariable))
+	}
 
 	if *showVersion {
 		fmt.Println("mkdocsgo", version)
@@ -187,6 +214,18 @@ func run(cfg config, logger *log.Logger) error {
 		}
 	}
 
+	// Counting costs a map update per request; nobody pays it unless the
+	// counts go somewhere. Where they go is checked here, before the site and
+	// the index, for the same reason as the zones.
+	var meter *metrics.Metrics
+	var exports *metricsExports
+	if cfg.metricsAddr != "" || cfg.metricsPush != "" {
+		meter = metrics.New(version)
+		if exports, err = prepareMetrics(cfg, meter, logger); err != nil {
+			return err
+		}
+	}
+
 	var site *web.Site
 	if servesSite {
 		dir := cfg.siteDir
@@ -209,17 +248,32 @@ func run(cfg config, logger *log.Logger) error {
 		if err != nil {
 			return fmt.Errorf("cannot load the MkDocs project: %w", err)
 		}
-		service = mcpserver.New(project, mcpserver.Options{
+		options := mcpserver.Options{
 			Version:      version,
 			SearchLimit:  cfg.searchLimit,
 			WithResource: !cfg.noResources,
-		})
+		}
+		if meter != nil {
+			options.Observer = meter
+		}
+		service = mcpserver.New(project, options)
 		logger.Printf("mcp: %q, %d pages, %d sections indexed (%s)",
 			project.SiteName, service.Pages(), service.Sections(), project.ConfigAt)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if exports != nil {
+		wait := exports.start(ctx, logger, meter, cfg.metricsInterval)
+		// Cancelled before waiting, however run returns: the metrics listener
+		// and the pusher only finish once the context is done, and the
+		// pusher's last act - deleting its group - must happen before exit.
+		defer func() {
+			stop()
+			wait()
+		}()
+	}
 
 	// MCP only, no address: the transport is stdio, which is what a local
 	// client launches. Nothing else can be served that way.
@@ -238,7 +292,7 @@ func run(cfg config, logger *log.Logger) error {
 		return nil
 	}
 
-	return serveHTTP(ctx, logger, cfg, zones, site, service)
+	return serveHTTP(ctx, logger, cfg, zones, site, service, meter)
 }
 
 // loadZones reads the zone configuration.
@@ -338,7 +392,7 @@ func newMCPServer(service *mcpserver.Service) *mcp.Server {
 	return server
 }
 
-func serveHTTP(ctx context.Context, logger *log.Logger, cfg config, zones *authz.Config, site *web.Site, service *mcpserver.Service) error {
+func serveHTTP(ctx context.Context, logger *log.Logger, cfg config, zones *authz.Config, site *web.Site, service *mcpserver.Service, meter *metrics.Metrics) error {
 	mux := http.NewServeMux()
 
 	// Outside every zone, deliberately. A platform health check arrives at the
@@ -392,9 +446,7 @@ func serveHTTP(ctx context.Context, logger *log.Logger, cfg config, zones *authz
 
 	var handler http.Handler = mux
 	handler = recoverPanics(logger, handler)
-	if !cfg.noAccessLog {
-		handler = logRequests(logger, handler)
-	}
+	handler = observe(logger, !cfg.noAccessLog, meter, mux, site, handler)
 
 	srv := &http.Server{
 		Addr:              cfg.httpAddr,
@@ -476,7 +528,13 @@ func (s *statusRecorder) Flush() {
 	}
 }
 
-func logRequests(logger *log.Logger, next http.Handler) http.Handler {
+// observe writes the access log and counts the request, whichever of the two
+// is on. Both want to know who made it and how it ended, so one wrapper finds
+// out for both.
+func observe(logger *log.Logger, accessLog bool, meter *metrics.Metrics, mux *http.ServeMux, site *web.Site, next http.Handler) http.Handler {
+	if !accessLog && meter == nil {
+		return next
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
 		rec := &statusRecorder{ResponseWriter: w}
@@ -488,13 +546,121 @@ func logRequests(logger *log.Logger, next http.Handler) http.Handler {
 		if rec.status == 0 {
 			rec.status = http.StatusOK
 		}
-		who := identity.Identity().LogFields()
-		if who != "" {
-			who = " " + who
+		took := time.Since(started)
+		who := identity.Identity()
+
+		if accessLog {
+			fields := who.LogFields()
+			if fields != "" {
+				fields = " " + fields
+			}
+			logger.Printf("%s %s %d %dB %s%s", r.Method, r.URL.Path, rec.status, rec.bytes,
+				took.Round(time.Millisecond), fields)
 		}
-		logger.Printf("%s %s %d %dB %s%s", r.Method, r.URL.Path, rec.status, rec.bytes,
-			time.Since(started).Round(time.Millisecond), who)
+
+		if meter != nil {
+			// The route is the pattern the mux chose, not the path, so a
+			// scanner's thousand paths are one "site" and not a thousand
+			// series.
+			_, pattern := mux.Handler(r)
+			route := routeOf(pattern)
+			zone := ""
+			if who != nil {
+				zone = who.Zone
+			}
+			meter.HTTPRequest(route, zone, rec.status, int64(rec.bytes), took)
+			if route == "site" && site != nil {
+				kind, page := site.Describe(r.URL.Path)
+				meter.SiteRequest(kind, page, rec.status)
+			}
+		}
 	})
+}
+
+// routeOf names the part of the server a mux pattern belongs to.
+func routeOf(pattern string) string {
+	switch {
+	case pattern == "/":
+		return "site"
+	case pattern == "/mcp":
+		return "mcp"
+	case pattern == "/healthz":
+		return "healthz"
+	case strings.HasPrefix(pattern, "/.well-known/"), strings.HasPrefix(pattern, "/oauth/"):
+		return "auth"
+	}
+	return "other"
+}
+
+// metricsExports is where the counts go: a listener of their own, a
+// Pushgateway, or both.
+//
+// The listener is separate from -http on purpose. That one is the route the
+// documentation is published on, often to the internet, and what people read
+// and what agents ask is not something to publish with it.
+type metricsExports struct {
+	listener net.Listener
+	pusher   *metrics.Pusher
+}
+
+// prepareMetrics checks the gateway address and binds the listener, so a bad
+// URL or a port already taken fails the start instead of filling the log.
+func prepareMetrics(cfg config, meter *metrics.Metrics, logger *log.Logger) (*metricsExports, error) {
+	exports := &metricsExports{}
+	if cfg.metricsPush != "" {
+		instance := cfg.metricsInstance
+		if instance == "" {
+			instance, _ = os.Hostname()
+		}
+		pusher, err := metrics.NewPusher(meter, cfg.metricsPush, cfg.metricsJob, instance, cfg.metricsInterval, logger)
+		if err != nil {
+			return nil, fmt.Errorf("cannot push metrics: %w", err)
+		}
+		exports.pusher = pusher
+	}
+	if cfg.metricsAddr != "" {
+		listener, err := net.Listen("tcp", cfg.metricsAddr)
+		if err != nil {
+			return nil, fmt.Errorf("cannot serve metrics: %w", err)
+		}
+		exports.listener = listener
+	}
+	return exports, nil
+}
+
+// start serves and pushes until ctx ends. The wait it returns blocks until
+// both have finished.
+func (e *metricsExports) start(ctx context.Context, logger *log.Logger, meter *metrics.Metrics, interval time.Duration) (wait func()) {
+	var running sync.WaitGroup
+	if e.listener != nil {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", meter.Handler())
+		srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		running.Add(2)
+		go func() {
+			defer running.Done()
+			if err := srv.Serve(e.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Printf("metrics: %v", err)
+			}
+		}()
+		go func() {
+			defer running.Done()
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+		}()
+		logger.Printf("metrics: serving at http://%s/metrics", e.listener.Addr())
+	}
+	if e.pusher != nil {
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			e.pusher.Run(ctx)
+		}()
+		logger.Printf("metrics: pushing to %s every %s", e.pusher.Target(), interval)
+	}
+	return running.Wait
 }
 
 // guardOrigin rejects cross-origin browser requests to the MCP endpoint.

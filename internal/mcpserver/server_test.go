@@ -3,7 +3,9 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,12 +19,17 @@ import (
 // serialisation and all.
 func connect(t *testing.T) (*mcp.ClientSession, context.Context) {
 	t.Helper()
+	return connectWith(t, nil)
+}
+
+func connectWith(t *testing.T, observer Observer) (*mcp.ClientSession, context.Context) {
+	t.Helper()
 
 	project, err := mkdocs.Load("../../testdata/site")
 	if err != nil {
 		t.Fatalf("load project: %v", err)
 	}
-	service := New(project, Options{Version: "test", WithResource: true})
+	service := New(project, Options{Version: "test", WithResource: true, Observer: observer})
 
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: "mkdocsgo", Version: "test"},
@@ -282,5 +289,75 @@ func TestResourcesServeSourceMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(read.Contents[0].Text, "# Deploying") {
 		t.Error("the resource did not return the source Markdown")
+	}
+}
+
+// recorder is an Observer that writes down what it hears, one line per event.
+type recorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *recorder) note(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, fmt.Sprintf(format, args...))
+}
+
+func (r *recorder) Received(method string) { r.note("method %s", method) }
+func (r *recorder) ToolCalled(tool, outcome string, _ time.Duration) {
+	r.note("tool %s %s", tool, outcome)
+}
+func (r *recorder) PageRead(path, via string)     { r.note("read %s via %s", path, via) }
+func (r *recorder) Searched(hits int, top string) { r.note("search %d %s", hits, top) }
+
+func (r *recorder) saw(event string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.events {
+		if e == event {
+			return true
+		}
+	}
+	return false
+}
+
+func TestTheObserverHearsWhatAgentsAskFor(t *testing.T) {
+	observer := &recorder{}
+	session, ctx := connectWith(t, observer)
+
+	call(t, session, ctx, "search_docs", map[string]any{"query": "rolling deployment"})
+	call(t, session, ctx, "search_docs", map[string]any{"query": "zzzqqqxxx"})
+	call(t, session, ctx, "get_page", map[string]any{"path": "guides/deploy"})
+	call(t, session, ctx, "get_section", map[string]any{"path": "guides/deploy.md", "anchor": "rolling-updates"})
+	call(t, session, ctx, "get_page", map[string]any{"path": "no/such/page.md"})
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "../../etc/passwd"}); err == nil {
+		t.Fatal("an unknown tool was accepted")
+	}
+	if _, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: "docs://index.md"}); err != nil {
+		t.Fatalf("ReadResource: %v", err)
+	}
+
+	for _, want := range []string{
+		"method tools/call",
+		"method resources/read",
+		"search 0 ",
+		"search 1 guides/deploy.md",
+		"read guides/deploy.md via get_page",
+		"read guides/deploy.md via get_section",
+		"read index.md via resource",
+		"tool search_docs ok",
+		"tool get_section ok",
+		"tool get_page error", // no such page: the model is told how to recover
+		"tool other failed",   // an unknown tool's name is not passed on
+	} {
+		if !observer.saw(want) {
+			t.Errorf("the observer did not hear %q; it heard %q", want, observer.events)
+		}
+	}
+	for _, e := range observer.events {
+		if strings.Contains(e, "passwd") || strings.Contains(e, "zzzqqqxxx") {
+			t.Errorf("something a client typed reached the observer: %q", e)
+		}
 	}
 }

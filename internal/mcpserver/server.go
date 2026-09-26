@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -31,13 +32,65 @@ type Options struct {
 	SearchLimit  int
 	MaxSnippet   int
 	WithResource bool
+	// Observer, if set, is told what agents ask for.
+	Observer Observer
 }
+
+// Observer learns what agents ask for: every MCP method, every tool call and
+// how it ended, every page handed out, every search. It is how metrics see
+// inside the tools without this package knowing which monitoring system, if
+// any, is listening.
+//
+// Every value it is given comes from a closed set - a method the SDK accepted,
+// a tool registered here or "other", a page that exists - so an observer can
+// use them as metric labels. Nothing a client typed is passed on.
+type Observer interface {
+	Received(method string)
+	ToolCalled(tool, outcome string, took time.Duration)
+	PageRead(path, via string)
+	Searched(hits int, top string)
+}
+
+// How a tool call ended, as an Observer hears it.
+const (
+	OutcomeOK = "ok"
+	// OutcomeError is a tool error: the model asked for something that is not
+	// there and was told how to correct itself.
+	OutcomeError = "error"
+	// OutcomeFailed is a protocol error: an unknown tool, arguments that do
+	// not fit the schema.
+	OutcomeFailed = "failed"
+)
+
+// How a page reached an agent, as an Observer hears it.
+const (
+	ViaGetPage    = "get_page"
+	ViaGetSection = "get_section"
+	ViaResource   = "resource"
+)
+
+const (
+	toolSearch     = "search_docs"
+	toolGetPage    = "get_page"
+	toolGetSection = "get_section"
+	toolListPages  = "list_pages"
+)
+
+var tools = map[string]bool{toolSearch: true, toolGetPage: true, toolGetSection: true, toolListPages: true}
+
+type nobody struct{}
+
+func (nobody) Received(string)                          {}
+func (nobody) ToolCalled(string, string, time.Duration) {}
+func (nobody) PageRead(string, string)                  {}
+func (nobody) Searched(int, string)                     {}
 
 // Service is the project plus its index, wired to MCP handlers.
 type Service struct {
-	project *mkdocs.Project
-	ix      *index.Index
-	opts    Options
+	project  *mkdocs.Project
+	ix       *index.Index
+	opts     Options
+	observer Observer
 }
 
 type docRef struct {
@@ -63,7 +116,11 @@ func New(project *mkdocs.Project, opts Options) *Service {
 			})
 		}
 	}
-	return &Service{project: project, ix: index.Build(docs), opts: opts}
+	observer := opts.Observer
+	if observer == nil {
+		observer = nobody{}
+	}
+	return &Service{project: project, ix: index.Build(docs), opts: opts, observer: observer}
 }
 
 // Sections reports how many indexed units the project produced.
@@ -163,8 +220,12 @@ func readOnly(title string) *mcp.ToolAnnotations {
 
 // Register adds every tool and resource to the server.
 func (s *Service) Register(server *mcp.Server) {
+	if _, silent := s.observer.(nobody); !silent {
+		server.AddReceivingMiddleware(s.observe)
+	}
+
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "search_docs",
+		Name: toolSearch,
 		Description: "Full-text search across the documentation. Returns the best matching " +
 			"sections - not whole pages - each with its navigation breadcrumb, its anchor " +
 			"and the matching text in context. Start here: it is the cheapest way to find " +
@@ -173,7 +234,7 @@ func (s *Service) Register(server *mcp.Server) {
 	}, s.searchDocs)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "get_page",
+		Name: toolGetPage,
 		Description: "Return one page as its original Markdown source, plus the list of its " +
 			"headings. Use it when you need the whole page; for a single heading prefer " +
 			"get_section, which returns far less text.",
@@ -181,7 +242,7 @@ func (s *Service) Register(server *mcp.Server) {
 	}, s.getPage)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "get_section",
+		Name: toolGetSection,
 		Description: "Return one section of a page - a single heading and the text beneath it - " +
 			"as Markdown. This is the cheapest way to read documentation: pair it with the " +
 			"path and anchor from search_docs.",
@@ -189,7 +250,7 @@ func (s *Service) Register(server *mcp.Server) {
 	}, s.getSection)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "list_pages",
+		Name: toolListPages,
 		Description: "List every page with its navigation breadcrumb and heading count. Use it " +
 			"to learn how the documentation is organised before searching, or to check " +
 			"whether a topic has a page at all.",
@@ -208,12 +269,44 @@ func (s *Service) Register(server *mcp.Server) {
 			Description: page.Breadcrumb(),
 			MIMEType:    "text/markdown",
 		}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+			s.observer.PageRead(page.Path, ViaResource)
 			return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
 				URI:      page.URI(),
 				MIMEType: "text/markdown",
 				Text:     page.Source,
 			}}}, nil
 		})
+	}
+}
+
+// observe tells the observer about every method that reaches the server, and
+// about tool calls in particular: which tool, how it ended, how long it took.
+//
+// The SDK turns away a method it does not know before any middleware runs, so
+// the method is from a closed set already. A tool name is not - an unknown one
+// is refused after this point - so anything not registered here counts as
+// "other".
+func (s *Service) observe(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		started := time.Now()
+		result, err := next(ctx, method, req)
+		s.observer.Received(method)
+		if method != "tools/call" {
+			return result, err
+		}
+
+		tool := "other"
+		if params, ok := req.GetParams().(*mcp.CallToolParamsRaw); ok && tools[params.Name] {
+			tool = params.Name
+		}
+		outcome := OutcomeOK
+		if err != nil {
+			outcome = OutcomeFailed
+		} else if res, ok := result.(*mcp.CallToolResult); ok && res.IsError {
+			outcome = OutcomeError
+		}
+		s.observer.ToolCalled(tool, outcome, time.Since(started))
+		return result, err
 	}
 }
 
@@ -245,6 +338,11 @@ func (s *Service) searchDocs(ctx context.Context, _ *mcp.CallToolRequest, in sea
 	}
 
 	hits := s.ix.Search(query, limit)
+	top := ""
+	if len(hits) > 0 {
+		top = hits[0].Doc.Ref.(docRef).page.Path
+	}
+	s.observer.Searched(len(hits), top)
 	out := searchOut{Query: query, Hits: make([]searchHit, 0, len(hits))}
 	var text strings.Builder
 	for _, hit := range hits {
@@ -283,6 +381,7 @@ func (s *Service) getPage(ctx context.Context, _ *mcp.CallToolRequest, in pageIn
 	if !ok {
 		return errorResult[pageOut](fmt.Sprintf("no page at %q. Call list_pages to see the available paths.", in.Path))
 	}
+	s.observer.PageRead(page.Path, ViaGetPage)
 	out := pageOut{
 		Path:       page.Path,
 		Title:      page.Title,
@@ -331,6 +430,7 @@ func (s *Service) getSection(ctx context.Context, _ *mcp.CallToolRequest, in sec
 			heading = strings.Repeat("#", section.Level) + " " + section.Title + "\n\n"
 		}
 		markdown := heading + section.Body
+		s.observer.PageRead(page.Path, ViaGetSection)
 		out := sectionOut{
 			Path:       page.Path,
 			Anchor:     section.Anchor,

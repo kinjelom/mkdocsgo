@@ -25,6 +25,7 @@ Markdown sources. No Python, no plugins and no build step at run time.
 | Serving the site: ETags, compression, cache policy | [SERVING.md](./SERVING.md)           |
 | MCP: tools, search, anchors, origin validation     | [MCP.md](./MCP.md)                   |
 | Zones: who may reach what; OAuth for Claude        | [AUTH.md](./AUTH.md)                 |
+| Prometheus metrics: what is read, scrape or push   | [METRICS.md](./METRICS.md)           |
 | How it works inside                                | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Docker, Cloud Foundry, Kubernetes                  | [DEPLOYMENT.md](./DEPLOYMENT.md)     |
 | What it replaces, and what it costs                | [COMPARISON.md](./COMPARISON.md)     |
@@ -79,29 +80,39 @@ mkdocsgo -mode mcp      -project .                      # MCP over stdio
 `mcp` with no `-http` serves over stdio instead, which is what a local MCP
 client launches. Every other mode needs `-http`.
 
-| Flag             | Default          | Meaning                                                          |
-|------------------|------------------|------------------------------------------------------------------|
-| `-mode`          | `site+mcp`       | What to serve                                                    |
-| `-project`       | `.`              | Directory holding `mkdocs.yml`                                   |
-| `-site-dir`      | `<project>/site` | The built site                                                   |
-| `-config`        | `<project>/mkdocsgo.yml` | Zone configuration; absent by default, and then everything is public |
-| `-http`          | *(empty)*        | Address to listen on; falls back to `$DOC_PORT`, then `$PORT`    |
-| `-search-limit`  | `8`              | Default search results (callers may override, capped at 50)      |
-| `-allow-origin`  | -                | Additional allowed `Origin` for `/mcp`; repeatable               |
-| `-no-resources`  | `false`          | MCP tools only, no per-page resources                            |
-| `-no-access-log` | `false`          | Do not log HTTP requests                                         |
-| `-healthcheck`   | -                | GET a URL, exit 0 on 2xx, then quit; `self` means own `/healthz` |
-| `-mcp-probe`     | -                | Ask an MCP endpoint for its tool list, exit 0 if it answers      |
-| `-new-token`     | -                | Mint a bearer token, print it and the line to paste, then quit   |
-| `-hash-password` | -                | Hash a password for the zone configuration, then quit            |
-| `-version`       |                  | Print the version and exit                                       |
+| Flag                     | Default                  | Meaning                                                                      |
+|--------------------------|--------------------------|------------------------------------------------------------------------------|
+| `-mode`                  | `site+mcp`               | What to serve                                                                |
+| `-project`               | `.`                      | Directory holding `mkdocs.yml`                                               |
+| `-site-dir`              | `<project>/site`         | The built site                                                               |
+| `-config`                | `<project>/mkdocsgo.yml` | Zone configuration; absent by default, and then everything is public         |
+| `-http`                  | *(empty)*                | Address to listen on; falls back to `$DOC_PORT`, then `$PORT`                |
+| `-search-limit`          | `8`                      | Default search results (callers may override, capped at 50)                  |
+| `-allow-origin`          | -                        | Additional allowed `Origin` for `/mcp`; repeatable                           |
+| `-no-resources`          | `false`                  | MCP tools only, no per-page resources                                        |
+| `-no-access-log`         | `false`                  | Do not log HTTP requests                                                     |
+| `-metrics-addr`          | -                        | Serve Prometheus metrics at `/metrics` on this separate address              |
+| `-metrics-push`          | -                        | Push metrics to this Pushgateway; falls back to `$MKDOCSGO_METRICS_PUSH_URL` |
+| `-metrics-push-interval` | `30s`                    | How often to push                                                            |
+| `-metrics-job`           | `mkdocsgo`               | The `job` label of pushed metrics                                            |
+| `-metrics-instance`      | host name                | The `instance` label of pushed metrics                                       |
+| `-healthcheck`           | -                        | GET a URL, exit 0 on 2xx, then quit; `self` means own `/healthz`             |
+| `-mcp-probe`             | -                        | Ask an MCP endpoint for its tool list, exit 0 if it answers                  |
+| `-new-token`             | -                        | Mint a bearer token, print it and the line to paste, then quit               |
+| `-hash-password`         | -                        | Hash a password for the zone configuration, then quit                        |
+| `-version`               |                          | Print the version and exit                                                   |
 
-The last two exist because the runtime image is distroless: no shell, no
-`curl`, no `wget`. The binary probes itself.
+`-healthcheck` and `-mcp-probe` exist because the runtime image is distroless:
+no shell, no `curl`, no `wget`. The binary probes itself.
 
-One more environment variable besides the port: `MKDOCSGO_OAUTH_KEY`, the key
-a zone with `oauth: true` signs its tokens with - at least 32 random
-characters, the same on every instance. See [AUTH.md](./AUTH.md#signing-in-from-claudeai-oauth).
+Two more environment variables besides the port, both because what they hold
+must not appear in the process list:
+
+- `MKDOCSGO_OAUTH_KEY`, the key a zone with `oauth: true` signs its tokens
+  with - at least 32 random characters, the same on every instance. See
+  [AUTH.md](./AUTH.md#signing-in-from-claudeai-oauth).
+- `MKDOCSGO_METRICS_PUSH_URL`, the Pushgateway to push to, when its URL carries
+  a password. See [METRICS.md](./METRICS.md#pushing).
 
 ## Build and run
 
@@ -160,7 +171,8 @@ internal/web/        static site: manifest, ETags, gzip, headers, cache policy
 internal/mkdocs/     mkdocs.yml, nav, Markdown sectioning, anchors
 internal/index/      BM25 index, tokeniser, snippets
 internal/mcpserver/  MCP tools and resources
-internal/authz/      zones: address to policy, credentials, challenges
+internal/authz/      zones: address to policy, credentials, challenges, OAuth
+internal/metrics/    Prometheus counters, /metrics, Pushgateway pushes
 scripts/             test, build, package, image, release
 docs/adr/            decisions, and what they cost
 release.conf         where a release goes: GitHub, registry, platforms

@@ -170,6 +170,7 @@ domains, at the cost of a second deployment.
 |----------------------|--------------------------------------------------------------------------------------------------|
 | `internal/web`       | Site manifest, ETags, gzip, security headers, cache policy, 404                                  |
 | `internal/authz`     | Zones, host matching, credentials, challenges, resource metadata, the OAuth authorization server |
+| `internal/metrics`   | Counters and histograms in the Prometheus text format, `/metrics`, pushes to a Pushgateway       |
 | `internal/mkdocs`    | Configuration, navigation, Markdown sectioning, anchors                                          |
 | `internal/index`     | Tokeniser, BM25 index, snippet extraction                                                        |
 | `internal/mcpserver` | Tool and resource definitions, payload shapes, error wording                                     |
@@ -183,7 +184,15 @@ touches nothing below it.
 
 `authz` is the same shape from the other side: it is `http.Handler` middleware
 that knows nothing about documentation, and neither `web` nor `mcpserver` knows
-it exists. The cache-policy downgrade in a restricted zone is done by rewriting
+it exists.
+
+`metrics` knows neither side either. `mcpserver` declares an `Observer` - told
+which tool was called, which page was handed out, whether a search found
+anything - and `metrics` happens to satisfy it; `web` offers `Describe`, which
+names a path as a page of the build or a kind of file without echoing the path
+back. `cmd/mkdocsgo` wires the three together. Which is also why nothing a
+client typed can become a metric label: the only values that reach `metrics`
+are ones the other two packages vouch for. The cache-policy downgrade in a restricted zone is done by rewriting
 the header on the way out rather than by telling `web` about zones, which is
 why one is still readable without the other.
 

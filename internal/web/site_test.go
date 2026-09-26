@@ -210,3 +210,27 @@ func TestLoadReportsMissingDirectory(t *testing.T) {
 		t.Errorf("error should hint at `mkdocs build`, got: %v", err)
 	}
 }
+
+func TestDescribeNamesPagesAndNeverEchoesAPath(t *testing.T) {
+	site, err := Load("../../testdata/built")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for path, want := range map[string][2]string{
+		"/":                                   {KindPage, "/"},
+		"/index.html":                         {KindPage, "/"},
+		"/guides/":                            {KindPage, "/guides/"},
+		"/guides":                             {KindPage, "/guides/"},
+		"/guides/index.html":                  {KindPage, "/guides/"},
+		"/assets/stylesheets/main.abc123.css": {KindStylesheet, ""},
+		"/assets/vendor/redoc.js":             {KindScript, ""},
+		"/assets/images/x.png":                {KindImage, ""},
+		"/small.txt":                          {KindOther, ""},
+		"/wp-admin/install.php":               {KindNotFound, ""},
+	} {
+		kind, page := site.Describe(path)
+		if kind != want[0] || page != want[1] {
+			t.Errorf("Describe(%q) = %q, %q; want %q, %q", path, kind, page, want[0], want[1])
+		}
+	}
+}

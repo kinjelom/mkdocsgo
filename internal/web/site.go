@@ -44,6 +44,8 @@ type file struct {
 	contentType string
 	etag        string
 	gzipped     []byte // nil when not stored compressed
+	kind        string // what Describe calls it
+	page        string // its URL, for an HTML page; empty otherwise
 }
 
 // Site is an immutable view of a built site, safe for concurrent use.
@@ -104,8 +106,10 @@ func Load(dir string) (*Site, error) {
 				site.gzBytes += int64(len(gz))
 			}
 		}
+		urlPath := "/" + filepath.ToSlash(rel)
+		f.kind, f.page = classify(urlPath)
 		site.rawBytes += stat.Size()
-		site.files["/"+filepath.ToSlash(rel)] = f
+		site.files[urlPath] = f
 		return nil
 	})
 	if err != nil {
@@ -120,6 +124,58 @@ func (s *Site) Len() int { return len(s.files) }
 
 // Bytes reports the size on disk and the size held compressed in memory.
 func (s *Site) Bytes() (raw, compressed int64) { return s.rawBytes, s.gzBytes }
+
+// What Describe calls a file. A page is an HTML document; everything else is
+// named by what it is for, not by where it is.
+const (
+	KindPage        = "page"
+	KindSearchIndex = "search_index"
+	KindStylesheet  = "stylesheet"
+	KindScript      = "script"
+	KindImage       = "image"
+	KindFont        = "font"
+	KindOther       = "other"
+	KindNotFound    = "not_found"
+)
+
+// Describe says what a request path would be served as, without serving it:
+// the kind of file, and for an HTML page its URL - "/guides/" for
+// guides/index.html, however the request spelled it.
+//
+// It never hands back a path that is not in the build. That is what makes its
+// answer safe to count: whatever a scanner asks for, the set of answers is
+// the set of pages MkDocs wrote.
+func (s *Site) Describe(urlPath string) (kind, page string) {
+	f, ok := s.lookup(urlPath)
+	if !ok {
+		return KindNotFound, ""
+	}
+	return f.kind, f.page
+}
+
+func classify(urlPath string) (kind, page string) {
+	switch ext := strings.ToLower(path.Ext(urlPath)); {
+	case ext == ".html":
+		if path.Base(urlPath) == "index.html" {
+			return KindPage, strings.TrimSuffix(urlPath, "index.html")
+		}
+		return KindPage, urlPath
+	case path.Base(urlPath) == "search_index.json":
+		// Material's client-side search: the queries never reach the server,
+		// so this download is all of search the server can see.
+		return KindSearchIndex, ""
+	case ext == ".css":
+		return KindStylesheet, ""
+	case ext == ".js", ext == ".mjs":
+		return KindScript, ""
+	case ext == ".png", ext == ".jpg", ext == ".jpeg", ext == ".gif", ext == ".webp",
+		ext == ".avif", ext == ".svg", ext == ".ico":
+		return KindImage, ""
+	case ext == ".woff", ext == ".woff2", ext == ".ttf", ext == ".otf", ext == ".eot":
+		return KindFont, ""
+	}
+	return KindOther, ""
+}
 
 // lookup resolves a request path the way MkDocs expects it to resolve:
 // an exact file, then the directory's index.html.

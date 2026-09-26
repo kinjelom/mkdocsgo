@@ -14,6 +14,22 @@ change, not at release time.
 
 ### Added
 
+- **Prometheus metrics: what the site and the MCP server are asked for.**
+  Which pages people read (`mkdocsgo_site_page_views_total`), which tools
+  agents call and how the calls end, which pages those tools hand out, how
+  many searches found nothing, and requests, latency and bytes by route and
+  zone. Every label value comes from a closed set - a page in the build, a
+  registered tool, a configured zone - never from a request path or a search
+  query, so a scanner cannot mint series. Off unless asked for.
+- `-metrics-addr` serves `/metrics` on a listener of its own, never on the
+  published `-http` address.
+- `-metrics-push` sends the metrics to a Pushgateway - or VictoriaMetrics - every
+  `-metrics-push-interval`, grouped by `-metrics-job` and `-metrics-instance`,
+  and deletes the group on shutdown. The URL may carry Basic credentials and is
+  read from `MKDOCSGO_METRICS_PUSH_URL` when the flag is absent, so they stay out
+  of the process list. This is how metrics leave a Cloud Foundry instance.
+- `METRICS.md`: the metrics, both ways out, and the queries worth having.
+
 - **OAuth sign-in for MCP clients, so claude.ai can connect.** claude.ai,
   Claude Desktop and Claude mobile add a remote server by its URL and nothing
   else, so a static token was no way in for them. A zone with `oauth: true` now
