@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-09-26
-- **Applies to:** mkdocsgo after 0.3.0
+- **Applies to:** mkdocsgo 0.4.0
 - **Builds on:** [0001](./0001-zone-based-authentication.md)
 
 ## Context
