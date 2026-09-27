@@ -2,6 +2,8 @@ package authz
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -193,6 +195,51 @@ principals:
 `)
 	if err == nil || !strings.Contains(err.Error(), "not implemented") {
 		t.Fatalf("error = %v, want the unimplemented method refused rather than silently ignored", err)
+	}
+}
+
+func TestMarkdownOnAZoneThatServesNothingIsAnError(t *testing.T) {
+	_, err := parse(t, `version: 1
+zones:
+  retired:
+    hosts: [old.example.com]
+    access: off
+    markdown: true
+`)
+	if err == nil || !strings.Contains(err.Error(), "markdown") {
+		t.Fatalf("error = %v, want markdown on an off zone refused", err)
+	}
+}
+
+func TestMarkdownIsOfferedWhereTheZoneSaysSo(t *testing.T) {
+	config := mustParse(t, `version: 1
+zones:
+  intranet:
+    hosts: [docs.internal]
+    access: public
+    markdown: true
+  internet:
+    hosts: [docs.example.com]
+    access: public
+`)
+	if got := config.MarkdownZones(); len(got) != 1 || got[0] != "intranet" {
+		t.Errorf("MarkdownZones() = %v", got)
+	}
+	var offered bool
+	handler := config.Middleware(SurfaceSite, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offered = config.OffersMarkdown(r)
+	}))
+	for host, want := range map[string]bool{"docs.internal": true, "docs.example.com": false} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Host = host
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+		if offered != want {
+			t.Errorf("OffersMarkdown on %s = %v, want %v", host, offered, want)
+		}
+	}
+	// Outside the zone check nobody knows the zone, so nothing is offered.
+	if config.OffersMarkdown(httptest.NewRequest(http.MethodGet, "/", nil)) {
+		t.Error("OffersMarkdown answered yes for a request that never passed the zone check")
 	}
 }
 

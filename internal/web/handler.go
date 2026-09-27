@@ -3,6 +3,8 @@ package web
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -29,11 +31,34 @@ func (s *Site) Handler() http.Handler {
 			w.Header().Set(name, value)
 		}
 
+		// Asked once: whether the zone behind this request offers Markdown
+		// decides both where a .md address leads and which HTML is served.
+		offered := s.offer != nil && s.offer(r)
+
 		// Resolve first, then check the method: 405 means "this resource
 		// exists but not with that verb", so a POST to a path that is not
 		// here at all must still be 404.
-		f, ok := s.lookup(r.URL.Path)
-		if !ok {
+		var f *file
+		if src, ok := s.sources[cleanPath(r.URL.Path)]; ok && offered {
+			f = src.pick(r)
+			if anchor, asked := sectionAsked(r); asked && s.section != nil {
+				section, anchors, found := s.sectionFile(r, src, anchor)
+				if !found {
+					// Said plainly, with the anchors that do exist: the
+					// reader is usually an agent that can try again.
+					w.Header().Set("Cache-Control", "no-cache")
+					http.Error(w, fmt.Sprintf("%s has no section anchored %q; its sections are: %s",
+						src.rel, anchor, strings.Join(anchors, ", ")), http.StatusNotFound)
+					return
+				}
+				f = section
+			}
+		} else if found, ok := s.lookup(r.URL.Path); ok {
+			f = found
+			if offered && f.withSource != nil {
+				f = f.withSource
+			}
+		} else {
 			s.serveNotFound(w, r)
 			return
 		}
@@ -61,7 +86,11 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request, f *file, cache stri
 	header.Set("Content-Type", f.contentType)
 	header.Set("Cache-Control", cache)
 	header.Set("ETag", f.etag)
-	header.Set("Vary", "Accept-Encoding")
+	if f.vary != "" {
+		header.Set("Vary", f.vary)
+	} else {
+		header.Set("Vary", "Accept-Encoding")
+	}
 
 	// A conditional request is answered before anything is read or written,
 	// which is the whole point of the content-hash ETag.
@@ -82,23 +111,29 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request, f *file, cache stri
 		return
 	}
 
-	handle, err := os.Open(f.abs)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+	var body io.ReadSeeker
+	if f.content != nil {
+		body = bytes.NewReader(f.content)
+	} else {
+		handle, err := os.Open(f.abs)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		defer handle.Close()
+		body = handle
 	}
-	defer handle.Close()
 
 	if status != http.StatusOK {
 		header.Set("Content-Length", itoa64(f.size))
 		w.WriteHeader(status)
 		if r.Method != http.MethodHead {
-			_, _ = copyTo(w, handle)
+			_, _ = copyTo(w, body)
 		}
 		return
 	}
 	// ServeContent handles Range and If-Modified-Since for the plain case.
-	http.ServeContent(w, r, f.abs, f.modTime, handle)
+	http.ServeContent(w, r, f.abs, f.modTime, body)
 }
 
 func acceptsGzip(header string) bool {

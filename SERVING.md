@@ -40,6 +40,75 @@ fingerprinted asset is still immutable to the browser that fetched it - but a
 shared cache loses the right to store it and hand it to the next person.
 [AUTH.md](./AUTH.md) has the rest.
 
+## Markdown sources
+
+A zone with `markdown: true` in [`mkdocsgo.yml`](./AUTH.md#the-file) offers
+every page's Markdown source next to its HTML - for a person who wants the
+text, and for an agent that fetches URLs rather than speaking MCP.
+
+```yaml
+zones:
+  intranet:
+    hosts: [docs.intranet.example.com]
+    access: public
+    markdown: true
+```
+
+**At the page's address with `.md` added.** Every spelling of that leads to
+the same file:
+
+| Page                  | Its Markdown                                                                                          |
+|-----------------------|-------------------------------------------------------------------------------------------------------|
+| `/guides/deploy/`     | `/guides/deploy.md` - the path under `docs_dir` - and `/guides/deploy/.md`, `/guides/deploy/index.md` |
+| `/guides/`            | `/guides/index.md`, `/guides.md`, `/guides/.md`                                                       |
+| `/`                   | `/index.md`                                                                                           |
+| `/guides/deploy.html` | `/guides/deploy.md`, `/guides/deploy.html.md` - a site built without directory URLs                   |
+
+**One section, with `?section=`.** Any of those addresses followed by
+`?section=<anchor>` returns only that heading and the text beneath it, up to
+the next heading - what the MCP tool `get_section` returns, from the same code:
+
+```
+/guides/deploy.md?section=rolling-updates     the "Rolling updates" section
+/guides/deploy.md?section=%23rolling-updates  the same; a copied #anchor works
+/guides/deploy.md?section=                    the text before the first heading
+```
+
+The anchors are the ones in the page's URLs and table of contents. An anchor
+the page does not have is a `404` whose text lists the ones it does, so an
+agent can correct itself. A fragment - `/guides/deploy.md#rolling-updates` -
+cannot do this: a browser never sends it to the server.
+
+**On the page itself.** On a site built with Material, every page gets a
+download button among Material's own page actions, at the top right of the
+content, where "edit this page" would be. Every page, Material or not, gets
+`<link rel="alternate" type="text/markdown" href="…">` in its head, which is
+how an agent reading the HTML finds the source without guessing.
+
+**Browsers see it, agents get it as Markdown.** A request that accepts
+`text/html` - a browser following a link or an address typed by hand - gets
+the source as `text/plain`, which every browser shows rather than saves. Any
+other request gets `text/markdown`. Same bytes, two ETags, `Vary: Accept`.
+
+What that costs and guarantees:
+
+- **Only built pages.** A source whose page MkDocs did not build - excluded by
+  `exclude_docs`, or a draft - has no Markdown here either. The source is
+  published exactly where its HTML is. The MCP half applies the same rule, so
+  both halves publish the same set of pages - see [MCP.md](./MCP.md#which-pages).
+- **The source as written**: front matter, HTML comments, snippet include
+  lines and all. That is the reason it is a per-zone choice and off by default.
+  It is also what the MCP tools already return, so a zone that serves `/mcp`
+  has handed it out all along.
+- **Exactly as protected as the page.** The decision is made below the zone
+  check, so a restricted zone asks for the same credentials first.
+- **Every other zone sees what MkDocs built**, byte for byte - no button, no
+  link, and `.md` addresses answer 404. The pages with the button are a second
+  copy of each HTML page made at startup, with their own ETags and compressed
+  copies, held only when some zone offers Markdown.
+- **`docs/` must be deployed**, even with `-mode site`: that is where the
+  sources come from.
+
 ## Cost at rest
 
 For a 77-file, 6.9 MB site: 1.6 MB held gzipped in memory, and a startup well

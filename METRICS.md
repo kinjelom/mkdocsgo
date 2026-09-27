@@ -106,7 +106,7 @@ cf restart mkdocsgo-example
 | `mkdocsgo_site_requests_total`   | `kind`, `code` | Every site request, by what it asked for and how it ended                                                               |
 
 `kind` is `page`, `stylesheet`, `script`, `image`, `font`, `search_index`,
-`other` or `not_found`. `search_index` is Material's `search_index.json`, the
+`markdown` - a page's source, where a zone offers it - `other` or `not_found`. `search_index` is Material's `search_index.json`, the
 index a browser downloads to search on its own. What readers type into the
 search box never reaches the server, so it cannot be counted here.
 

@@ -1,6 +1,9 @@
 package mkdocs
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -112,5 +115,73 @@ func TestSectionsSkipFencedComments(t *testing.T) {
 	}
 	for missing := range want {
 		t.Errorf("missing anchor %q", missing)
+	}
+}
+
+func TestLoadLeavesDraftsOut(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		abs := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("mkdocs.yml", "site_name: Drafts\ndraft_docs: |\n  drafts/\n  *-wip.md\n")
+	write("docs/index.md", "# Home\n")
+	write("docs/drafts/next.md", "# Next release\n")
+	write("docs/guides/upgrade-wip.md", "# Upgrade\n")
+
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(p.Pages) != 1 || p.Pages[0].Path != "index.md" {
+		var paths []string
+		for _, page := range p.Pages {
+			paths = append(paths, page.Path)
+		}
+		t.Errorf("pages = %v; `mkdocs build` leaves drafts out, and so must the index", paths)
+	}
+}
+
+func TestRetainDropsPagesAndTheirLookups(t *testing.T) {
+	p := load(t)
+	dropped := p.Retain(func(path string) bool { return path != "guides/deploy.md" })
+	if len(dropped) != 1 || dropped[0] != "guides/deploy.md" {
+		t.Errorf("dropped = %v", dropped)
+	}
+	if _, ok := p.Page("guides/deploy.md"); ok {
+		t.Error("a dropped page can still be looked up")
+	}
+	if page, ok := p.Page("guides/index.md"); !ok || page.Path != "guides/index.md" {
+		t.Error("a kept page can no longer be looked up, or resolves to the wrong one")
+	}
+}
+
+func TestASectionAsADocumentOfItsOwn(t *testing.T) {
+	page, ok := load(t).Page("guides/deploy.md")
+	if !ok {
+		t.Fatal("no guides/deploy.md")
+	}
+	section, ok := page.Section("#rolling-updates")
+	if !ok {
+		t.Fatalf("no section rolling-updates; anchors are %v", page.Anchors())
+	}
+	markdown := section.Markdown()
+	if !strings.HasPrefix(markdown, "## Rolling updates\n\n") || !strings.Contains(markdown, "rolling deployment") {
+		t.Errorf("Markdown() = %q", markdown)
+	}
+	if strings.Contains(markdown, "IMAGE_VERSION") {
+		t.Error("the section runs into the next one")
+	}
+	if got := strings.Join(page.Anchors(), ","); got != "deploying,rolling-updates,image_version" {
+		t.Errorf("Anchors() = %s", got)
+	}
+	if _, ok := page.Section("no-such-anchor"); ok {
+		t.Error("a missing anchor was found")
 	}
 }

@@ -155,6 +155,37 @@ A `--8<-- "examples/report.json"` snippet include is therefore indexed
 The published site is unaffected - MkDocs already expanded it at build time -
 but a value that exists only inside an included file will not be found.
 
-`exclude_docs` is honoured for the common cases: one pattern per line,
-directory prefixes and shell globs. Negation (`!`) is ignored rather than
-half-implemented, because getting it wrong would index more than you asked for.
+`exclude_docs` and `draft_docs` are honoured for the common cases: one pattern
+per line, directory prefixes and shell globs. Negation (`!`) is ignored rather
+than half-implemented, because getting it wrong would index more than you asked
+for. A draft is left out because `mkdocs build` leaves it out, and what this
+server publishes is what `mkdocs build` produced.
+
+## Which pages
+
+**The ones the site has.** With a built site loaded - `-mode site+mcp` - the
+MCP half keeps only the pages MkDocs built a page from, by the same rule the
+[Markdown sources](./SERVING.md#markdown-sources) use. A page a plugin
+excluded, or one no HTML was written for, is not published documentation, and
+an agent does not get to read it either. The startup log names what was left
+out:
+
+```
+mkdocs: 2 pages in docs_dir have no page in the built site and are left out: guides/deploy.md, orphan.md
+```
+
+A plugin that moves pages to addresses of its own - a blog's dated URLs, a
+language prefix - defeats that rule, and its pages are left out with the rest.
+The log line is where to notice it; `-mode mcp` as a separate process keeps
+them.
+
+**Without a site** - `-mode mcp` - there is nothing to compare against, so it
+is every `.md` under `docs_dir` that `exclude_docs` and `draft_docs` do not
+remove.
+
+## One section over plain HTTP
+
+An agent that fetches URLs instead of speaking MCP gets the same economy from
+the site, where a zone offers Markdown: `/guides/deploy.md?section=rolling-updates`
+returns what `get_section` would - the heading and the text beneath it - from
+the same code. See [SERVING.md](./SERVING.md#markdown-sources).

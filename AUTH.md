@@ -92,6 +92,7 @@ the environment, `MKDOCSGO_OAUTH_KEY`, and never in this file.
 | `zones.*.method`                | no              | `static` (the default and, today, the only one). The seam for `oidc`                           |
 | `zones.*.principals`            | when restricted | Who may in                                                                                     |
 | `zones.*.oauth`                 | no              | `true` lets an MCP client sign in as one of the zone's principals, with its password           |
+| `zones.*.markdown`              | no              | `true` serves each page's Markdown source beside it - see SERVING.md                           |
 | `principals.<name>`             | -               | The name is the Basic auth login                                                               |
 | `principals.*.display`          | no              | For humans reading the file                                                                    |
 | `principals.*.password`         | no              | `$argon2id$...` or `$2y$...`. Absent means no browser access                                   |
@@ -104,9 +105,10 @@ the environment, `MKDOCSGO_OAUTH_KEY`, and never in this file.
 A restricted zone with no principals, a principal a zone names but nobody
 defined, a principal nobody lets in, a plaintext password where a hash belongs,
 one host claimed by two zones, an unknown key, `method: oidc` - each stops the
-server from starting. So do `oauth: true` on a zone nobody signs in to (a public
-one, or one whose principals have no password), `oauth:` settings no zone uses,
-and a zone with `oauth: true` served over HTTP without `MKDOCSGO_OAUTH_KEY`.
+server from starting. So do `markdown: true` on a zone that is `off`,
+`oauth: true` on a zone nobody signs in to (a public one, or one whose
+principals have no password), `oauth:` settings no zone uses, and a zone with
+`oauth: true` served over HTTP without `MKDOCSGO_OAUTH_KEY`.
 
 The alternative is a zone that silently has no way in, or worse, one whose
 policy is not the one written down. A documentation server that refuses to

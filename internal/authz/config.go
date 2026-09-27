@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -65,6 +66,9 @@ type Zone struct {
 	// OAuth lets an MCP client sign in as one of the zone's principals through
 	// the built-in authorization server, instead of being handed a token.
 	OAuth bool `yaml:"oauth"`
+	// Markdown offers each page's Markdown source next to its HTML, to
+	// whoever may read the page.
+	Markdown bool `yaml:"markdown"`
 
 	Name    string `yaml:"-"`
 	members []*Principal
@@ -225,6 +229,9 @@ func (c *Config) validateZone(zone *Zone, hostOwner map[string]string, used map[
 	if len(zone.Hosts) == 0 {
 		return fmt.Errorf("hosts is required - a zone nothing reaches has no effect")
 	}
+	if zone.Markdown && zone.Access == AccessOff {
+		return fmt.Errorf("markdown is on but access is off, so no page is served to have a source")
+	}
 	for _, host := range zone.Hosts {
 		// Checked before normalising, not after: normalisation strips a
 		// trailing dot, and "*." would otherwise arrive here as "*" and
@@ -334,6 +341,37 @@ func (p *Principal) validate() error {
 		}
 	}
 	return nil
+}
+
+// MarkdownZones names the zones that offer the Markdown source of their
+// pages, in order; none, without a configuration.
+func (c *Config) MarkdownZones() []string {
+	if c == nil {
+		return nil
+	}
+	var names []string
+	for _, name := range sortedKeys(c.Zones) {
+		if c.Zones[name].Markdown {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// OffersMarkdown reports whether the zone a request reached offers the
+// Markdown source of its pages. It reads the identity the zone check attached
+// to the request, so it answers only for a handler below Middleware - which
+// is also what makes the source exactly as protected as the page.
+func (c *Config) OffersMarkdown(r *http.Request) bool {
+	if c == nil {
+		return false
+	}
+	id := IdentityFrom(r.Context())
+	if id == nil {
+		return false
+	}
+	zone, ok := c.Zones[id.Zone]
+	return ok && zone.Markdown
 }
 
 // usesOAuth reports whether any zone asks for the authorization server.

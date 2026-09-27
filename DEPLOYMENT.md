@@ -22,8 +22,9 @@ The runtime needs a directory laid out the way MkDocs already lays one out:
 runs once, wherever you build, and the result travels as files.
 
 `docs/` is there because the MCP half indexes the author's Markdown, not
-rendered HTML. It is a fraction of the size of `site/`. If you deploy
-`-mode site` only, you can leave it out.
+rendered HTML, and because a zone with `markdown: true` serves it next to each
+page. It is a fraction of the size of `site/`. If you deploy `-mode site` only
+and no zone offers Markdown, you can leave it out.
 
 ### The port
 

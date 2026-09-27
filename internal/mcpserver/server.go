@@ -425,38 +425,31 @@ func (s *Service) getSection(ctx context.Context, _ *mcp.CallToolRequest, in sec
 	if !ok {
 		return errorResult[sectionOut](fmt.Sprintf("no page at %q. Call list_pages to see the available paths.", in.Path))
 	}
-	anchor := strings.TrimPrefix(strings.TrimSpace(in.Anchor), "#")
-	for _, section := range page.Sections {
-		if section.Anchor != anchor {
-			continue
-		}
-		uri := page.URI()
-		if anchor != "" {
-			uri += "#" + anchor
-		}
-		heading := ""
-		if section.Title != "" {
-			heading = strings.Repeat("#", section.Level) + " " + section.Title + "\n\n"
-		}
-		markdown := heading + section.Body
-		s.observer.PageRead(page.Path, ViaGetSection)
-		out := sectionOut{
-			Path:       page.Path,
-			Anchor:     section.Anchor,
-			Heading:    section.Title,
-			Breadcrumb: breadcrumbOf(docRef{page: page, section: section}),
-			Level:      section.Level,
-			Line:       section.Line,
-			URI:        uri,
-			Markdown:   markdown,
-		}
-		return &mcp.CallToolResult{Content: []mcp.Content{
-			&mcp.TextContent{Text: markdown},
-		}}, out, nil
+	section, ok := page.Section(in.Anchor)
+	if !ok {
+		return errorResult[sectionOut](fmt.Sprintf(
+			"page %q has no section anchored %q. Call get_page for the list of anchors.",
+			page.Path, strings.TrimPrefix(strings.TrimSpace(in.Anchor), "#")))
 	}
-	return errorResult[sectionOut](fmt.Sprintf(
-		"page %q has no section anchored %q. Call get_page for the list of anchors.",
-		page.Path, anchor))
+	uri := page.URI()
+	if section.Anchor != "" {
+		uri += "#" + section.Anchor
+	}
+	markdown := section.Markdown()
+	s.observer.PageRead(page.Path, ViaGetSection)
+	out := sectionOut{
+		Path:       page.Path,
+		Anchor:     section.Anchor,
+		Heading:    section.Title,
+		Breadcrumb: breadcrumbOf(docRef{page: page, section: section}),
+		Level:      section.Level,
+		Line:       section.Line,
+		URI:        uri,
+		Markdown:   markdown,
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{
+		&mcp.TextContent{Text: markdown},
+	}}, out, nil
 }
 
 func (s *Service) listPages(ctx context.Context, _ *mcp.CallToolRequest, in listIn) (*mcp.CallToolResult, listOut, error) {

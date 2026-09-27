@@ -39,6 +39,18 @@ type Section struct {
 	Line int
 }
 
+// Markdown is the section as a document of its own: its heading line, then
+// the text beneath it. The lead section, which has no heading, is its text.
+//
+// This is what get_section returns and what a page's .md?section= serves, so
+// the two can never disagree about what a section is.
+func (s Section) Markdown() string {
+	if s.Title == "" {
+		return s.Body
+	}
+	return strings.Repeat("#", s.Level) + " " + s.Title + "\n\n" + s.Body
+}
+
 // Breadcrumb renders the heading trail plus this section's own title.
 func (s Section) Breadcrumb() string {
 	if len(s.Trail) == 0 {

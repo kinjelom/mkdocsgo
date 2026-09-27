@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io/fs"
 	"mime"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -46,6 +47,30 @@ type file struct {
 	gzipped     []byte // nil when not stored compressed
 	kind        string // what Describe calls it
 	page        string // its URL, for an HTML page; empty otherwise
+	content     []byte // held in memory instead of read from abs, when set
+	vary        string // the Vary header, when it is more than Accept-Encoding
+
+	// withSource is this HTML page as a zone that offers Markdown serves it:
+	// the same page, with a link to its source. Nil when there is none.
+	withSource *file
+}
+
+// newFile describes content: its type, its content-hash ETag and, when it is
+// worth it, a compressed copy.
+func newFile(content []byte, ext string, modTime time.Time) *file {
+	sum := sha256.Sum256(content)
+	f := &file{
+		size:        int64(len(content)),
+		modTime:     modTime,
+		contentType: contentTypeFor(ext),
+		etag:        `"` + hex.EncodeToString(sum[:16]) + `"`,
+	}
+	if compressible[ext] && len(content) >= minCompressSize {
+		if gz, ok := gzipBytes(content); ok {
+			f.gzipped = gz
+		}
+	}
+	return f
 }
 
 // Site is an immutable view of a built site, safe for concurrent use.
@@ -55,6 +80,12 @@ type Site struct {
 	notFound *file
 	rawBytes int64
 	gzBytes  int64
+
+	// sources maps every address a page's Markdown answers at to that
+	// Markdown; offer decides, per request, whether it answers at all.
+	sources map[string]*source
+	offer   func(*http.Request) bool
+	section func(path, anchor string) (string, []string, bool)
 }
 
 // Load indexes every file under dir. The directory is read once; later edits
@@ -91,21 +122,9 @@ func Load(dir string) (*Site, error) {
 			return err
 		}
 
-		sum := sha256.Sum256(content)
-		ext := strings.ToLower(filepath.Ext(abs))
-		f := &file{
-			abs:         abs,
-			size:        stat.Size(),
-			modTime:     stat.ModTime(),
-			contentType: contentTypeFor(ext),
-			etag:        `"` + hex.EncodeToString(sum[:16]) + `"`,
-		}
-		if compressible[ext] && stat.Size() >= minCompressSize {
-			if gz, ok := gzipBytes(content); ok {
-				f.gzipped = gz
-				site.gzBytes += int64(len(gz))
-			}
-		}
+		f := newFile(content, strings.ToLower(filepath.Ext(abs)), stat.ModTime())
+		f.abs = abs
+		site.gzBytes += int64(len(f.gzipped))
 		urlPath := "/" + filepath.ToSlash(rel)
 		f.kind, f.page = classify(urlPath)
 		site.rawBytes += stat.Size()
@@ -146,6 +165,9 @@ const (
 // answer safe to count: whatever a scanner asks for, the set of answers is
 // the set of pages MkDocs wrote.
 func (s *Site) Describe(urlPath string) (kind, page string) {
+	if _, ok := s.sources[cleanPath(urlPath)]; ok {
+		return KindMarkdown, ""
+	}
 	f, ok := s.lookup(urlPath)
 	if !ok {
 		return KindNotFound, ""
@@ -180,7 +202,7 @@ func classify(urlPath string) (kind, page string) {
 // lookup resolves a request path the way MkDocs expects it to resolve:
 // an exact file, then the directory's index.html.
 func (s *Site) lookup(urlPath string) (*file, bool) {
-	clean := path.Clean("/" + strings.TrimPrefix(urlPath, "/"))
+	clean := cleanPath(urlPath)
 	if f, ok := s.files[clean]; ok {
 		return f, true
 	}
@@ -189,6 +211,10 @@ func (s *Site) lookup(urlPath string) (*file, bool) {
 		return f, true
 	}
 	return nil, false
+}
+
+func cleanPath(urlPath string) string {
+	return path.Clean("/" + strings.TrimPrefix(urlPath, "/"))
 }
 
 func contentTypeFor(ext string) string {

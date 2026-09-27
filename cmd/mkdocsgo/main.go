@@ -263,12 +263,60 @@ func run(cfg config, logger *log.Logger) error {
 			site.Len(), humanBytes(raw), humanBytes(compressed), dir)
 	}
 
-	var service *mcpserver.Service
-	if servesMCP {
-		project, err := mkdocs.Load(cfg.project)
+	// The Markdown is read once, for the MCP index and for the zones that
+	// offer it on the site - which is why -mode site needs docs/ as soon as
+	// one zone does.
+	markdownZones := zones.MarkdownZones()
+	offersMarkdown := site != nil && len(markdownZones) > 0
+	var project *mkdocs.Project
+	if servesMCP || offersMarkdown {
+		loaded, err := mkdocs.Load(cfg.project)
 		if err != nil {
 			return fmt.Errorf("cannot load the MkDocs project: %w", err)
 		}
+		project = loaded
+	}
+
+	// With a built site at hand, it decides what is published - for the MCP
+	// half as much as for the Markdown on the site. A page MkDocs did not
+	// build, because a plugin excluded it or it is a draft, is not
+	// documentation anyone was meant to read, whatever docs_dir holds.
+	if site != nil && project != nil {
+		paths := make([]string, 0, len(project.Pages))
+		for _, page := range project.Pages {
+			paths = append(paths, page.Path)
+		}
+		built := site.Built(paths)
+		if dropped := project.Retain(func(path string) bool { return built[path] }); len(dropped) > 0 {
+			logger.Printf("mkdocs: %d pages in docs_dir have no page in the built site and are left out: %s",
+				len(dropped), listSome(dropped, 5))
+		}
+	}
+
+	if offersMarkdown {
+		sources := web.Sources{
+			Pages: make(map[string][]byte, len(project.Pages)),
+			// The same sections get_section returns, from the same code.
+			Section: func(path, anchor string) (string, []string, bool) {
+				page, ok := project.Page(path)
+				if !ok {
+					return "", nil, false
+				}
+				if section, ok := page.Section(anchor); ok {
+					return section.Markdown(), nil, true
+				}
+				return "", page.Anchors(), false
+			},
+		}
+		for _, page := range project.Pages {
+			sources.Pages[page.Path] = []byte(page.Source)
+		}
+		offered := site.OfferSources(sources, zones.OffersMarkdown)
+		logger.Printf("site: the Markdown of %d pages, offered in zone %s", offered, strings.Join(markdownZones, ", "))
+	}
+
+	var service *mcpserver.Service
+	if servesMCP {
 		options := mcpserver.Options{
 			Version:      version,
 			SearchLimit:  cfg.searchLimit,
@@ -606,6 +654,15 @@ func observe(logger *log.Logger, accessLog bool, meter *metrics.Metrics, mux *ht
 			}
 		}
 	})
+}
+
+// listSome joins the first n items and says how many more there are, so one
+// log line stays one line.
+func listSome(items []string, n int) string {
+	if len(items) <= n {
+		return strings.Join(items, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(items[:n], ", "), len(items)-n)
 }
 
 // principalOf is who the zone check found behind a request, if anyone.

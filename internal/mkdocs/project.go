@@ -41,6 +41,30 @@ func (p Page) Breadcrumb() string {
 	return strings.Join(append(append([]string{}, p.NavTrail...), p.Title), " > ")
 }
 
+// Section finds the section with that anchor. A leading # is ignored, since
+// that is how an anchor is usually quoted; an empty anchor is the text before
+// the first heading.
+func (p *Page) Section(anchor string) (Section, bool) {
+	anchor = strings.TrimPrefix(strings.TrimSpace(anchor), "#")
+	for _, section := range p.Sections {
+		if section.Anchor == anchor {
+			return section, true
+		}
+	}
+	return Section{}, false
+}
+
+// Anchors lists the anchors of the page's headings, in document order.
+func (p *Page) Anchors() []string {
+	anchors := make([]string, 0, len(p.Sections))
+	for _, section := range p.Sections {
+		if section.Title != "" {
+			anchors = append(anchors, section.Anchor)
+		}
+	}
+	return anchors
+}
+
 // Project is a loaded MkDocs project.
 type Project struct {
 	Root     string
@@ -126,6 +150,10 @@ func Load(dir string) (*Project, error) {
 	}
 
 	excludes := parseExcludes(scalarField(doc, "exclude_docs"))
+	// A draft is built by `mkdocs serve` and left out by `mkdocs build`, and
+	// this server only ever serves what `mkdocs build` produced - so a draft
+	// is as unpublished as an excluded page, and read the same way.
+	excludes = append(excludes, parseExcludes(scalarField(doc, "draft_docs"))...)
 	navTitles, navTrails := walkNav(mappingValue(doc, "nav"), nil)
 
 	err = filepath.WalkDir(docsDir, func(abs string, entry fs.DirEntry, err error) error {
@@ -173,6 +201,30 @@ func Load(dir string) (*Project, error) {
 		project.byPath[project.Pages[i].Path] = &project.Pages[i]
 	}
 	return project, nil
+}
+
+// Retain keeps only the pages keep accepts, and returns the paths of the ones
+// it dropped, in order.
+//
+// It is how the MCP half is held to the pages that were actually built: a
+// page a plugin excluded, or one MkDocs placed somewhere the site does not
+// have, is not in the published documentation, whatever docs_dir holds.
+func (p *Project) Retain(keep func(path string) bool) []string {
+	var kept []Page
+	var dropped []string
+	for _, page := range p.Pages {
+		if keep(page.Path) {
+			kept = append(kept, page)
+		} else {
+			dropped = append(dropped, page.Path)
+		}
+	}
+	p.Pages = kept
+	p.byPath = make(map[string]*Page, len(kept))
+	for i := range p.Pages {
+		p.byPath[p.Pages[i].Path] = &p.Pages[i]
+	}
+	return dropped
 }
 
 // fallbackTitle is used for a page the navigation does not name: its first
@@ -247,7 +299,8 @@ func walkNav(node *yaml.Node, trail []string) (map[string]string, map[string][]s
 	return titles, trails
 }
 
-// parseExcludes reads the exclude_docs block.
+// parseExcludes reads the exclude_docs block, and draft_docs, which has the
+// same syntax.
 //
 // MkDocs accepts gitignore syntax there. This understands the part projects
 // actually use - one pattern per line, directory prefixes and shell globs -

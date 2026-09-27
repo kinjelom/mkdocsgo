@@ -94,15 +94,15 @@ registered at all: neither is a runtime check.
 
 ## Startup
 
-| Step                | What happens                                                                 | Why it is not obvious                                                                                                                                                                   |
-|---------------------|------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Read `mkdocsgo.yml` | Zones, principals, credential hashes, and the OAuth key from the environment | First, and strict: a configuration error costs a second rather than the time to hash and compress a whole site first. A restricted zone that could never let anyone in stops the server |
-| Read `mkdocs.yml`   | Decoded into a `yaml.Node`                                                   | A plain map loses nav ordering, and `mkdocs.yml` routinely carries `!!python/name:` tags that break strict decoding                                                                     |
-| Resolve pages       | Walk `docs_dir`, apply `exclude_docs`, map `nav:` onto files                 | Gives every page a title and a breadcrumb; pages absent from nav are kept but flagged `in_nav: false`                                                                                   |
-| Split pages         | Strip front matter, cut at ATX headings                                      | Fenced code blocks are tracked, so a `# comment` in a shell example is not mistaken for a heading                                                                                       |
-| Compute anchors     | Reproduce Python-Markdown's `toc` slug                                       | So a returned anchor is the same fragment the published site uses                                                                                                                       |
-| Build the index     | One BM25 document per section, heading terms weighted                        | Sections, not pages, are what an agent should receive                                                                                                                                   |
-| Index the site      | Hash every file, compress what compresses                                    | The hash becomes the ETag; compressing once beats compressing per request                                                                                                               |
+| Step                | What happens                                                                  | Why it is not obvious                                                                                                                                                                   |
+|---------------------|-------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Read `mkdocsgo.yml` | Zones, principals, credential hashes, and the OAuth key from the environment  | First, and strict: a configuration error costs a second rather than the time to hash and compress a whole site first. A restricted zone that could never let anyone in stops the server |
+| Read `mkdocs.yml`   | Decoded into a `yaml.Node`                                                    | A plain map loses nav ordering, and `mkdocs.yml` routinely carries `!!python/name:` tags that break strict decoding                                                                     |
+| Resolve pages       | Walk `docs_dir`, apply `exclude_docs` and `draft_docs`, map `nav:` onto files | Gives every page a title and a breadcrumb; pages absent from nav are kept but flagged `in_nav: false`                                                                                   |
+| Split pages         | Strip front matter, cut at ATX headings                                       | Fenced code blocks are tracked, so a `# comment` in a shell example is not mistaken for a heading                                                                                       |
+| Compute anchors     | Reproduce Python-Markdown's `toc` slug                                        | So a returned anchor is the same fragment the published site uses                                                                                                                       |
+| Build the index     | One BM25 document per section, heading terms weighted                         | Sections, not pages, are what an agent should receive                                                                                                                                   |
+| Index the site      | Hash every file, compress what compresses                                     | The hash becomes the ETag; compressing once beats compressing per request                                                                                                               |
 
 Everything above is immutable afterwards, so both halves are read concurrently
 without locking.
@@ -133,7 +133,9 @@ run to thousands of lines.
 ## Integration with MkDocs
 
 **What it reads.** `mkdocs.yml` - `site_name`, `docs_dir`, `exclude_docs`,
-`nav` - every `.md` under `docs_dir`, and the built `site/`.
+`draft_docs`, `nav` - every `.md` under `docs_dir`, and the built `site/`.
+When both are loaded, the built site decides which of the `.md` files are
+published: one that no page was built from is left out of the MCP half too.
 
 **What it does not do.** It never runs MkDocs. No plugins load, no macros
 evaluate, no HTML renders. It reads sources and serves a finished build.

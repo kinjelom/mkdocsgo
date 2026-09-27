@@ -35,6 +35,20 @@ change, not at release time.
   unsalted, it can be recomputed from the names in `mkdocsgo.yml`, and the
   startup log says so. Off by default.
 - `METRICS.md`: the metrics, both ways out, and the queries worth having.
+- **Markdown sources on the site, per zone.** A zone with `markdown: true`
+  serves each page's Markdown at the page's address with `.md` added -
+  `/guides/deploy/` as `/guides/deploy.md` - and at its path under `docs_dir`.
+  On a Material site each page gets a download button among Material's page
+  actions, and every page gets a `<link rel="alternate" type="text/markdown">`
+  for agents that read HTML. A browser is sent `text/plain`, so it shows the
+  source instead of saving it. Only pages MkDocs built are offered, the source
+  is as protected as its page, and every other zone is served exactly what
+  MkDocs wrote. `markdown: true` on a zone that is `off` stops the start.
+- `?section=<anchor>` on any of those addresses returns one section - the
+  heading and the text beneath it - which is what `get_section` returns, from
+  the same code. For an agent that fetches URLs rather than speaking MCP, the
+  cheap way to read stays cheap. An unknown anchor is a 404 that lists the
+  ones the page has.
 
 - **OAuth sign-in for MCP clients, so claude.ai can connect.** claude.ai,
   Claude Desktop and Claude mobile add a remote server by its URL and nothing
@@ -61,6 +75,13 @@ change, not at release time.
 
 ### Changed
 
+- **Both halves publish the same pages.** With a built site loaded
+  (`-mode site+mcp`), the MCP half keeps only the pages MkDocs built a page
+  from - the rule the Markdown sources use. A page a plugin excluded is no
+  longer searchable and readable through `/mcp` while missing from the site.
+  The startup log lists what was left out.
+- `draft_docs` is honoured like `exclude_docs`: `mkdocs build` leaves drafts
+  out, and so does the index, in every mode.
 - The protected resource metadata of a zone with `oauth: true` names its
   authorization server in `authorization_servers`.
 - A bearer token presented and refused on `/mcp` gets `error="invalid_token"`

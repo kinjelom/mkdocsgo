@@ -22,7 +22,7 @@ Markdown sources. No Python, no plugins and no build step at run time.
 
 | Topic                                              | File                                 |
 |----------------------------------------------------|--------------------------------------|
-| Serving the site: ETags, compression, cache policy | [SERVING.md](./SERVING.md)           |
+| Serving the site: caching, compression, Markdown   | [SERVING.md](./SERVING.md)           |
 | MCP: tools, search, anchors, origin validation     | [MCP.md](./MCP.md)                   |
 | Zones: who may reach what; OAuth for Claude        | [AUTH.md](./AUTH.md)                 |
 | Prometheus metrics: what is read, scrape or push   | [METRICS.md](./METRICS.md)           |
